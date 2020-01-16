@@ -5,7 +5,9 @@
 
 #include <stdlib.h>
 #include <math.h>
+#include <vector>
 #include "mbed.h"
+#include "arm_math.h"
 #ifdef USE_MQTT
 #include "iothubtransportmqtt.h"
 #else
@@ -21,6 +23,18 @@
 
 #define APP_VERSION "1.2"
 #define IOT_AGENT_OK CODEFIRST_OK
+
+#define GET_MAG_READING_START 1
+#define MAG_BUFFER_FULL 2
+#define AZURE_START 3
+
+#define MAG_BUFFER_LENGTH 35
+
+std::vector<int> magBuffer;
+std::vector<int> magReadings;
+Ticker mag_ISR_timer;
+Ticker mag_reading_timer;
+
 
 #include "azure_certs.h"
 
@@ -75,6 +89,8 @@ static const char* deviceId               = "bpd0gzmw17"; /*must match the one o
 #define CTOF(x)         (x)
 
 Thread azure_client_thread(osPriorityNormal, 8*1024, NULL, "azure_client_thread"); // @suppress("Type cannot be resolved")
+Thread mag_sensor_thread(osPriorityHigh, 8*1024, NULL, "mag_sensor_thread");
+
 static void azure_task(void);
 
 
@@ -84,24 +100,80 @@ static void azure_task(void);
 // initialize all the ensors...
 //
 
-static int tilt_event;
+// static int tilt_event;
 
-void mems_int1(void)
-{
-    tilt_event++;
-}
+// void mems_int1(void)
+// {
+//     tilt_event++;
+// }
 
 void mems_init(void)
 {
-    acc_gyro->attach_int1_irq(&mems_int1);  // Attach callback to LSM6DSL INT1
-    hum_temp->enable();                     // Enable HTS221 enviromental sensor
-    pressure->enable();                     // Enable barametric pressure sensor
-    acc_gyro->enable_x();                   // Enable LSM6DSL accelerometer
-    acc_gyro->enable_tilt_detection();      // Enable Tilt Detection
+    // acc_gyro->attach_int1_irq(&mems_int1);  // Attach callback to LSM6DSL INT1
+    // hum_temp->enable();                     // Enable HTS221 enviromental sensor
+    // pressure->enable();                     // Enable barametric pressure sensor
+    // acc_gyro->enable_x();                   // Enable LSM6DSL accelerometer
+    // acc_gyro->enable_tilt_detection();      // Enable Tilt Detection
     
     mag->set_m_low_power_mode();  
 }
 
+void mag_sensor_ISR(void) {
+
+    //printf("mag_sensor_ISR\n");
+    int32_t axisData[3];
+
+    // mag->take_m_single_measurement();
+    // mag->get_m_axes(axisData);
+
+    // int magData = (int) sqrt(pow(axisData[0], 2) + pow(axisData[1], 2) + pow(axisData[2], 2));
+    //int magData = 1;
+    magBuffer.push_back(1);
+    
+    // if (magBuffer.size() == MAG_BUFFER_LENGTH) {
+    //     mag_sensor_thread.signal_set(MAG_BUFFER_FULL);
+    // }
+    mag_sensor_thread.signal_set(MAG_BUFFER_FULL);
+}
+
+void mag_reading_ISR(void) {
+
+    mag_sensor_thread.signal_set(GET_MAG_READING_START);
+
+} 
+
+void get_mag_reading(void) {
+
+    while (true) {
+
+        ThisThread::flags_wait_any(GET_MAG_READING_START);
+        printf("GET_MAG_READING_START\n");
+
+        magBuffer.clear();
+        mag_ISR_timer.attach(&mag_sensor_ISR, 0.1);
+
+        printf("Timer Attached\n");
+
+        ThisThread::flags_wait_any(MAG_BUFFER_FULL);
+        printf("MAG_BUFFER_FULL\n");
+
+        mag_ISR_timer.detach();
+
+        // Run Filter on mag data here
+
+        float32_t sum = 0;
+        for (int i = 0; i < magBuffer.size(); i++) sum += magBuffer[i];
+        magReadings.push_back( (int) (sum / MAG_BUFFER_LENGTH) );
+
+        if (magReadings.size() > 0) {
+            printf("%d\n", magReadings[magReadings.size() - 1]);
+
+            if (magReadings.size() == 10) {
+                azure_client_thread.signal_set(AZURE_START);
+            }
+        }
+    }   
+}
 
 // The main routine simply prints a banner, initializes the system
 // starts the worker threads and waits for a termination (join)
@@ -123,7 +195,7 @@ int main(void)
         printf("->using MQTT Transport Protocol\r\n");
     #endif
     printf("\r\n");
-    printf("This is the Nick Version 2\n");
+    printf("This is the Nick Version 3\n");
 
     if (platform_init() != 0) {
        printf("Error initializing the platform\r\n");
@@ -132,14 +204,14 @@ int main(void)
 
 
     XNucleoIKS01A2 *mems_expansion_board = XNucleoIKS01A2::instance(I2C_SDA, I2C_SCL, D4, D5);
-    hum_temp = mems_expansion_board->ht_sensor;
-    acc_gyro = mems_expansion_board->acc_gyro;
-    pressure = mems_expansion_board->pt_sensor;
-    mag      = mems_expansion_board->magnetometer;
-
+    mag = mems_expansion_board->magnetometer;
     mems_init();
-    azure_client_thread.start(azure_task);
 
+    mag_sensor_thread.start(get_mag_reading);
+    azure_client_thread.start(azure_task);
+    mag_reading_timer.attach(&mag_reading_ISR, 1.0);
+
+    mag_sensor_thread.join();
     azure_client_thread.join();
     platform_deinit();
     printf(" - - - - - - - ALL DONE - - - - - - - \n");
@@ -202,15 +274,11 @@ void sendMessage(IOTHUB_CLIENT_LL_HANDLE iotHubClientHandle, char* buffer, size_
 
 void azure_task(void)
 {
-    bool button_press = false, runTest = true, transmit = false;
-    bool tilt_detection_enabled=true;
-    float gtemp, ghumid, gpress, dt;
-
+    bool transmit = false;
+ 
     int  k;
     int  msg_sent=1;
     u8_t magStatus;
-
-    Timer t, t2;
 
     //
     // setup the iotDev struction contents...
@@ -235,42 +303,45 @@ void azure_task(void)
     iotDev->Tilt            = 0x2;
     iotDev->ButtonPress     = 0;
 
-    /* Setup IoTHub client configuration */
-    #ifdef IOTHUBTRANSPORTHTTP_H
-        IOTHUB_CLIENT_LL_HANDLE iotHubClientHandle = IoTHubClient_LL_CreateFromConnectionString(connectionString, HTTP_Protocol);
-    #else
-        IOTHUB_CLIENT_LL_HANDLE iotHubClientHandle = IoTHubClient_LL_CreateFromConnectionString(connectionString, MQTT_Protocol);
-    #endif
+    // /* Setup IoTHub client configuration */
+    // #ifdef IOTHUBTRANSPORTHTTP_H
+    //     IOTHUB_CLIENT_LL_HANDLE iotHubClientHandle = IoTHubClient_LL_CreateFromConnectionString(connectionString, HTTP_Protocol);
+    // #else
+    //     IOTHUB_CLIENT_LL_HANDLE iotHubClientHandle = IoTHubClient_LL_CreateFromConnectionString(connectionString, MQTT_Protocol);
+    // #endif
 
-    if (iotHubClientHandle == NULL) {
-        printf("Failed on IoTHubClient_Create\r\n");
-        return;
-    }
+    // if (iotHubClientHandle == NULL) {
+    //     printf("Failed on IoTHubClient_Create\r\n");
+    //     return;
+    // }
 
-        // add the certificate information
-    if (IoTHubClient_LL_SetOption(iotHubClientHandle, "TrustedCerts", certificates) != IOTHUB_CLIENT_OK)
-        printf("failure to set option \"TrustedCerts\"\r\n");
+    //     // add the certificate information
+    // if (IoTHubClient_LL_SetOption(iotHubClientHandle, "TrustedCerts", certificates) != IOTHUB_CLIENT_OK)
+    //     printf("failure to set option \"TrustedCerts\"\r\n");
 
-    #if MBED_CONF_APP_TELUSKIT == 1
-        if (IoTHubClient_LL_SetOption(iotHubClientHandle, "product_info", "TELUSIOTKIT") != IOTHUB_CLIENT_OK)
-            printf("failure to set option \"product_info\"\r\n");
-    #endif
+    // #if MBED_CONF_APP_TELUSKIT == 1
+    //     if (IoTHubClient_LL_SetOption(iotHubClientHandle, "product_info", "TELUSIOTKIT") != IOTHUB_CLIENT_OK)
+    //         printf("failure to set option \"product_info\"\r\n");
+    // #endif
 
-    #ifdef IOTHUBTRANSPORTHTTP_H
-        // polls will happen effectively at ~10 seconds.  The default value of minimumPollingTime is 25 minutes.
-        // For more information, see:
-        //     https://azure.microsoft.com/documentation/articles/iot-hub-devguide/#messaging
+    // #ifdef IOTHUBTRANSPORTHTTP_H
+    //     // polls will happen effectively at ~10 seconds.  The default value of minimumPollingTime is 25 minutes.
+    //     // For more information, see:
+    //     //     https://azure.microsoft.com/documentation/articles/iot-hub-devguide/#messaging
 
-        unsigned int minimumPollingTime = 9;
-        if (IoTHubClient_LL_SetOption(iotHubClientHandle, "MinimumPollingTime", &minimumPollingTime) != IOTHUB_CLIENT_OK)
-            printf("failure to set option \"MinimumPollingTime\"\r\n");
-    #endif
+    //     unsigned int minimumPollingTime = 9;
+    //     if (IoTHubClient_LL_SetOption(iotHubClientHandle, "MinimumPollingTime", &minimumPollingTime) != IOTHUB_CLIENT_OK)
+    //         printf("failure to set option \"MinimumPollingTime\"\r\n");
+    // #endif
 
-        if (IoTHubClientCore_LL_SetRetryPolicy(iotHubClientHandle, IOTHUB_CLIENT_RETRY_NONE, 1) != IOTHUB_CLIENT_OK){
-            printf("failure to set retry option\n");
-        }
+    //     if (IoTHubClientCore_LL_SetRetryPolicy(iotHubClientHandle, IOTHUB_CLIENT_RETRY_NONE, 1) != IOTHUB_CLIENT_OK){
+    //         printf("failure to set retry option\n");
+    //     }
     
-    while (runTest) {
+    while (true) {
+
+        ThisThread::flags_wait_any(AZURE_START);
+        printf("Azure Thread!\n");
         // t2.stop();
         // printf("t:%d\n",(int)t2.read_us());
         // t2.reset();
@@ -278,26 +349,25 @@ void azure_task(void)
 
         char*  msg;
         size_t msgSize;
-        int32_t magData[3];
-        int sampleRate = 7;
+        // int32_t magData[3];
 
         //hum_temp->get_temperature(&gtemp);           // get Temp
         //hum_temp->get_humidity(&ghumid);             // get Humidity
         //pressure->get_pressure(&gpress);             // get pressure
         
-        t.start();
-        mag->take_m_single_measurement();
+        // t.start();
+        // mag->take_m_single_measurement();
         
 
-        // Wait while for the measurement to complete - Nick
-        while (magStatus != LSM303AGR_MAG_MD_IDLE2_MODE) {
-            mag->get_m_mode_status(&magStatus);
-            //printf("Status: %d", (int)magStatus);
-        }
+        // // Wait while for the measurement to complete - Nick
+        // while (magStatus != LSM303AGR_MAG_MD_IDLE2_MODE) {
+        //     mag->get_m_mode_status(&magStatus);
+        //     //printf("Status: %d", (int)magStatus);
+        // }
         
-        mag->get_m_axes(magData);
+        // mag->get_m_axes(magData);
         
-        iotDev->MagneticField = (int) sqrt(pow(magData[0], 2) + pow(magData[1], 2) + pow(magData[2], 2));
+        // iotDev->MagneticField = (int) sqrt(pow(magData[0], 2) + pow(magData[1], 2) + pow(magData[2], 2));
 
      // if( tilt_event ) {
         //     tilt_event = 0;
@@ -316,26 +386,21 @@ void azure_task(void)
             printf("(%04d)",msg_sent++);
             msg = makeMessage(iotDev);
             msgSize = strlen(msg);
-            sendMessage(iotHubClientHandle, msg, msgSize);
+            //sendMessage(iotHubClientHandle, msg, msgSize);
             free(msg);
 
             /* schedule IoTHubClient to send events/receive commands */
-            IoTHubClient_LL_DoWork(iotHubClientHandle);
+            //IoTHubClient_LL_DoWork(iotHubClientHandle);
         }   
 
         //ThisThread::sleep_for(30000);  //in msec // @suppress("Function cannot be resolved")
         //printf("X:%d, Y:%d, Z:%d, RMS:%d, t:%f\n", (int)magData[0], (int)magData[1], (int)magData[2], iotDev->MagneticField, dt);
-        printf("%d\n", iotDev->MagneticField);
-        t.stop();
-        dt = t.read_ms();
-        t.reset();
 
-        t2.start();
         //printf('%d, %d\n', sampleRate - (int)dt, (int)dt);
-        ThisThread::sleep_for(4);
+       
     }
 
     free(iotDev);
-    IoTHubClient_LL_Destroy(iotHubClientHandle);
+    // IoTHubClient_LL_Destroy(iotHubClientHandle);
     return;
 }
