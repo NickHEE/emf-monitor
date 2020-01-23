@@ -2,6 +2,7 @@
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 //#define USE_MQTT
+//py -2 -m mbed compile -m NUCLEO_L496ZG -t GCC_ARM --profile toolchain_debug.json
 
 #include <stdlib.h>
 #include <math.h>
@@ -19,19 +20,23 @@
 #include "azure_c_shared_utility/agenttime.h"
 #include "jsondecoder.h"
 #include "button.hpp"
+#include "filter.h"
 //#include "_XNucleoIKS01A2.h"
 
 #define APP_VERSION "1.2"
 #define IOT_AGENT_OK CODEFIRST_OK
 
 #define GET_MAG_READING_START 1
-#define MAG_BUFFER_FULL 2
+#define GET_MAG_TAKE_MEASUREMENT 2
 #define AZURE_START 3
 
-#define MAG_BUFFER_LENGTH 35
 
-std::vector<int> magBuffer;
-std::vector<int> magReadings;
+
+float32_t magIn;
+float32_t magOut;
+
+std::vector<float> magReadings;
+
 Ticker mag_ISR_timer;
 Ticker mag_reading_timer;
 
@@ -120,58 +125,56 @@ void mems_init(void)
 
 void mag_sensor_ISR(void) {
 
-    //printf("mag_sensor_ISR\n");
-    int32_t axisData[3];
-
-    // mag->take_m_single_measurement();
-    // mag->get_m_axes(axisData);
-
-    // int magData = (int) sqrt(pow(axisData[0], 2) + pow(axisData[1], 2) + pow(axisData[2], 2));
-    //int magData = 1;
-    magBuffer.push_back(1);
-    
-    // if (magBuffer.size() == MAG_BUFFER_LENGTH) {
-    //     mag_sensor_thread.signal_set(MAG_BUFFER_FULL);
-    // }
-    mag_sensor_thread.signal_set(MAG_BUFFER_FULL);
+    mag_sensor_thread.signal_set(GET_MAG_TAKE_MEASUREMENT);
 }
 
 void mag_reading_ISR(void) {
 
     mag_sensor_thread.signal_set(GET_MAG_READING_START);
-
 } 
 
 void get_mag_reading(void) {
 
+    int32_t axisData[3];
+
+    float32_t FIRstate[BLOCK_SIZE + NUM_TAPS - 1];
+    arm_fir_instance_f32 FIRfilter;
+    arm_fir_init_f32(&FIRfilter, NUM_TAPS, (float32_t *) &filterCoeffs[0], &FIRstate[0], BLOCK_SIZE);  
+
+    mag_ISR_timer.attach(&mag_sensor_ISR, 0.0071);
+
+    Timer t;
+
     while (true) {
 
-        ThisThread::flags_wait_any(GET_MAG_READING_START);
-        printf("GET_MAG_READING_START\n");
+        ThisThread::flags_wait_any(GET_MAG_TAKE_MEASUREMENT);
+        // t.start();
 
-        magBuffer.clear();
-        mag_ISR_timer.attach(&mag_sensor_ISR, 0.1);
+        mag->take_m_single_measurement();
+        mag->get_m_axes(axisData);
+        magIn = sqrt(pow((float32_t)axisData[0], 2) + pow((float32_t)axisData[1], 2) + pow((float32_t)axisData[2], 2));
 
-        printf("Timer Attached\n");
+        arm_fir_f32(&FIRfilter, &magIn, &magOut, BLOCK_SIZE);
+        magReadings.push_back( (float) magOut );
 
-        ThisThread::flags_wait_any(MAG_BUFFER_FULL);
-        printf("MAG_BUFFER_FULL\n");
-
-        mag_ISR_timer.detach();
-
-        // Run Filter on mag data here
-
-        float32_t sum = 0;
-        for (int i = 0; i < magBuffer.size(); i++) sum += magBuffer[i];
-        magReadings.push_back( (int) (sum / MAG_BUFFER_LENGTH) );
-
-        if (magReadings.size() > 0) {
-            printf("%d\n", magReadings[magReadings.size() - 1]);
-
-            if (magReadings.size() == 10) {
-                azure_client_thread.signal_set(AZURE_START);
+        if (magReadings.size() >= FILTER_BUFFER_SIZE) {
+            
+            float avg = 0;
+            for (int i = 0; i < FILTER_BUFFER_SIZE; i++) {
+                avg += magReadings[i];
             }
+            printf("%f\n", avg/FILTER_BUFFER_SIZE);
+            magReadings.clear();
+
+            // if (!(magReadings.size() % 10)) {
+            //     azure_client_thread.signal_set(AZURE_START);
+            // }
         }
+
+        // t.stop();
+        // float t1 = t.read();
+        // t.reset();
+        // printf('t: %f\n', t1 );
     }   
 }
 
@@ -195,7 +198,7 @@ int main(void)
         printf("->using MQTT Transport Protocol\r\n");
     #endif
     printf("\r\n");
-    printf("This is the Nick Version 3\n");
+    printf("This is the Nick Version 4\n");
 
     if (platform_init() != 0) {
        printf("Error initializing the platform\r\n");
@@ -209,7 +212,7 @@ int main(void)
 
     mag_sensor_thread.start(get_mag_reading);
     azure_client_thread.start(azure_task);
-    mag_reading_timer.attach(&mag_reading_ISR, 1.0);
+    //mag_reading_timer.attach(&mag_reading_ISR, 1.0);
 
     mag_sensor_thread.join();
     azure_client_thread.join();
