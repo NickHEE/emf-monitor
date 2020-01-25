@@ -17,21 +17,28 @@
 #include "button.hpp"
 #include "azure_certs.h"
 
-
+Mutex magMutex;
 
 
 #include "ST7735/ST7735.h" // from Rolland Kamp: https://os.mbed.com/users/rolo644u/code/ST7735/file/291ac9fb4d64/ST7735.cpp
                            //   modified to have functions suitable for this project
 #include "screen_char_things.h"
 ST7735* screen;
-void string_to_screen(int line, int col, char *string_array);
+void string_to_screen(int line, int col, char *string_array, int str_length);
 void num_to_screen(int line, int col, int magnitude, int data_length);
 void single_char(int line, int col, const short *single_char);
 DigitalOut   RST_pin(D8);
+const int screen_update = 250;
+Thread screen_thread(osPriorityNormal, 8*1024, NULL, "screen_thread");
+static void screen_task(void);
+
+int global_magnitude = 0;
+int global_max_magnitude = 10;
+int global_battery_val = 35;
+char global_name[] = "Joseph";
 
 
-
-
+/*
 #include "lvgl/lvgl.h" // from littlevGL: https://littlevgl.com/download
 #include "lv_examples-master\lv_tutorial\1_hello_world\lv_tutorial_hello_world.h"
 #define LVGL_TICK 5
@@ -42,7 +49,7 @@ void display_init(void);
 void lv_ticker_func();
 static void my_disp_flush_cb(lv_disp_drv_t* disp_drv, const lv_area_t* area, lv_color_t* color_p);
 const int tick_interval = 500;
-
+*/
 
 
 
@@ -55,13 +62,11 @@ static const char* deviceId         = "xxxx"; /*must match the one on connection
 #define CTOF(x)         (x)
 Thread azure_client_thread(osPriorityNormal, 8*1024, NULL, "azure_client_thread");
 static void azure_task(void);
-Thread LED_thread(osPriorityNormal, 256, NULL, "LED_thread");
-static void LED_task(void);
 /* LED Management */
 DigitalOut   RED_led(LED1);
 DigitalOut   BLUE_led(LED2);
 DigitalOut   GREEN_led(LED3);
-const int    blink_interval = 1000; //msec
+const int    blink_interval = 500; //msec
 int          RED_state, BLUE_state, GREEN_state;
 /* create the GPS elements for example program */
 gps_data gdata; 
@@ -75,50 +80,75 @@ bg96_gps gps;
 #define SET_LED(l,s) (l##_led = ((l##_state=s)&LED_ON)? 1: 0)
 
 // The LED thread simply manages the LED's on an on-going basis
-static void LED_task(void)
+static void screen_task(void)
 {
-    printf("inside LED_task\n");
-    while (true) {
+    // draw magnetometer information to screen
+   int magnitude = 0; // variable to simulate magnetometer measurements
+   int row_for_mag = 8;
+   int col_for_mag = 9;
+   int mag_length = 5;
+   string_to_screen(row_for_mag, col_for_mag-8, "CURRENT:", 8);
+   num_to_screen(row_for_mag,col_for_mag,magnitude,mag_length);
+   single_char(row_for_mag,col_for_mag+mag_length,&m[0][0]);
+   single_char(row_for_mag,col_for_mag+mag_length+1,&G_[0][0]);
 
-        if( GREEN_state & LED_OFF ) 
-            GREEN_led = 0;
-        else if( GREEN_state & LED_ON ) 
-            GREEN_led = 1;
-        else if( GREEN_state & LED_BLINK ) 
-            GREEN_led = !GREEN_led;
+    // draw max magnetometer information to screen
+   int row_for_max_mag = 9;
+   int col_for_max_mag = 9;
+   int max_mag_length = 5;
+   int old_global_max = 0;
+   string_to_screen(row_for_max_mag, col_for_max_mag-4, "MAX:", 4);
+   num_to_screen(row_for_max_mag,col_for_max_mag,old_global_max,max_mag_length);
+   single_char(row_for_max_mag,col_for_max_mag+mag_length,&m[0][0]);
+   single_char(row_for_max_mag,col_for_max_mag+mag_length+1,&G_[0][0]);
 
-        if( BLUE_state & LED_OFF ) 
-            BLUE_led = 0;
-        else if( BLUE_state & LED_ON ) 
-            BLUE_led = 1;
-        else if( BLUE_state & LED_BLINK ) 
-            BLUE_led = !BLUE_led;
-        
-        if( RED_state & LED_OFF ) 
-            RED_led = 0;
-        else if( RED_state & LED_ON ) 
-            RED_led = 1;
-        else if( RED_state & LED_BLINK ) 
-            RED_led = !RED_led;
 
-        lv_tick_inc(blink_interval); /*Tell LittelvGL that "tick_interval" milliseconds were elapsed*/
-        ThisThread::sleep_for(blink_interval);  //in msec
+   // draw battery information to screen
+   int battery_value = 98;
+   int row_for_bat = 1;
+   int col_for_bat = 1;
+   int bat_length = 3;
+   string_to_screen(row_for_bat, col_for_bat, "BAT:", 4);
+   num_to_screen(row_for_bat,col_for_bat+4,battery_value, bat_length);
+   single_char(row_for_bat,col_for_bat+bat_length+4,&percent[0][0]);
+
+   // draw name information to screen
+   char name[] = "Nicholas";
+   char *last_name = name;
+   int row_for_name = 2;
+   int col_for_name = 1;
+   string_to_screen(row_for_name, col_for_name, "ID:", 3);
+   string_to_screen(row_for_name, col_for_name+3, name, 12);
+
+   // draw LTE connection information to screen
+   int row_for_LTE = 1;
+   int col_for_LTE = 15;
+   string_to_screen(row_for_LTE, col_for_LTE, "LTE:", 4);
+   single_char(row_for_LTE, col_for_LTE+4, &LTE_3bar[0][0]);
+
+   while (true) {
+       // update values on screen
+        magMutex.lock();
+        num_to_screen(row_for_mag,col_for_mag,global_magnitude,mag_length);
+        num_to_screen(row_for_bat,col_for_bat+4,global_battery_val, bat_length);
+
+        if (last_name != &global_name[0])
+        {
+            string_to_screen(row_for_name, col_for_name+3, global_name, 12);
+            last_name = &global_name[0];
+        }
+
+        if (global_max_magnitude > old_global_max)
+        {
+           num_to_screen(row_for_max_mag,col_for_max_mag,global_max_magnitude,max_mag_length);
+           old_global_max = global_max_magnitude;
+        }
+        magMutex.unlock();
+        ThisThread::sleep_for(screen_update);  //in msec
         }
 }
 
-/* Button callbacks for a press and release (light an LED) */
-static bool button_pressed = false;
-void ub_press(void)
-{
-    button_pressed = true;
-    SET_LED(RED,LED_ON);
-}
 
-void ub_release(int x)
-{
-    button_pressed = false;
-    SET_LED(RED,LED_OFF);
-}
 
 //
 // The main routine simply prints a banner, initializes the system
@@ -135,8 +165,7 @@ int main(void) /////////////////////////////////////////////////////////////////
     printf("     ****\r\n");
     printf("    **  **     Azure IoTClient Example, version %s\r\n", APP_VERSION);
     printf("   **    **    by AVNET\r\n");
-    printf("  ** ==== **   \r\n");
-    printf("\r\n");
+    printf("  ** ==== **   \r\n\n");
     printf("Identifier #45\n");
     // end of initial program verification
 
@@ -147,51 +176,14 @@ int main(void) /////////////////////////////////////////////////////////////////
     screen->initR(INITR_GREENTAB);
     screen->setRotation(0);wait_ms(100);
     screen->fillScreen(ST7735_BLACK); // have as other color for testing purposes
+    screen_thread.start(screen_task);
     printf("done initialization of screen\n");
     // done screen initialization
+    
 
-    //LED_thread.start(LED_task);
+/*
     //azure_client_thread.start(azure_task);
     //azure_client_thread.join();
-
-   // draw magnetometer information to screen
-   int magnitude = 25; // variable to simulate magnetometer measurements
-   int row_for_mag = 8;
-   int col_for_mag = 7;
-   int mag_length = 5;
-   num_to_screen(row_for_mag,col_for_mag,magnitude,mag_length);
-   single_char(row_for_mag,col_for_mag+mag_length,&m[0][0]);
-   single_char(row_for_mag,col_for_mag+mag_length+1,&G_[0][0]);
-
-
-   // draw battery information to screen
-   int battery_value = 89;
-   int row_for_bat = 1;
-   int col_for_bat = 1;
-   int bat_length = 3;
-   string_to_screen(row_for_bat, col_for_bat, "BAT:");
-   num_to_screen(row_for_bat,col_for_bat+4,battery_value, bat_length);
-   single_char(row_for_bat,col_for_bat+bat_length+4,&percent[0][0]);
-
-
-   // draw name information to screen
-   char name[] = "Nicholas";
-   int row_for_name = 2;
-   int col_for_name = 1;
-   string_to_screen(row_for_name, col_for_name, "ID:");
-   string_to_screen(row_for_name, col_for_name+3, name);
-
-
-   // draw LTE connection information to screen
-   int row_for_LTE = 1;
-   int col_for_LTE = 15;
-   string_to_screen(row_for_LTE, col_for_LTE, "LTE:");
-   single_char(row_for_LTE, col_for_LTE+4, &LTE_3bar[0][0]);
-
-
-
-
-
 wait_ms(1000);
 printf("attempting LittleVGL thing\n");
 
@@ -200,7 +192,6 @@ printf("attempting LittleVGL thing\n");
     ticker.attach(callback(&lv_ticker_func),TICKER_TIME);
  
     lv_tutorial_hello_world(); 
-/*
 */
 
 printf("made it to infinite loop");
@@ -264,7 +255,7 @@ void num_to_screen(int line, int col, int magnitude, int data_length)
 // line/col = positioning of text box on screen (line = y axis, col = x axis)
 // string_array = string to display on screen. Can handle alpha-numeric characters and some special characters
 //     charcters it does not know will be skipped
-void string_to_screen(int line, int col, char *string_array)
+void string_to_screen(int line, int col, char *string_array, int string_length)
    {
        int index = 0;
        int letter_val;
@@ -319,8 +310,28 @@ void string_to_screen(int line, int col, char *string_array)
         index++;
         col++;
     }   
+
+    // fill remainder of field in blank space
+    while (index < string_length)
+    {
+    screen->drawOneChar(SPACING + col*(SPACING + CHAR_COL),  SPACING + line*(SPACING + CHAR_ROW), &space[0][0]);
+    index++;
+    col++;
+    }
 }
 
+
+
+
+
+
+
+
+
+
+
+
+/*
 
 void display_init(void){
     lv_init();                                  //Initialize the LittlevGL
@@ -360,6 +371,7 @@ void my_disp_flush_cb(lv_disp_drv_t* disp_drv, const lv_area_t* area, lv_color_t
     lv_disp_flush_ready(disp_drv);
 }
 
+*/
 
 
 
@@ -371,17 +383,56 @@ void my_disp_flush_cb(lv_disp_drv_t* disp_drv, const lv_area_t* area, lv_color_t
 
 
 
+/*
 
+// Button callbacks for a press and release (light an LED) 
+static bool button_pressed = false;
+void ub_press(void)
+{
+    button_pressed = true;
+    SET_LED(RED,LED_ON);
+}
 
+void ub_release(int x)
+{
+    button_pressed = false;
+    SET_LED(RED,LED_OFF);
+}
+*/
 
+/*
+// The LED thread simply manages the LED's on an on-going basis
+static void LED_task(void)
+{
+    printf("inside LED_task\n");
+    while (true) {
 
+        if( GREEN_state & LED_OFF ) 
+            GREEN_led = 0;
+        else if( GREEN_state & LED_ON ) 
+            GREEN_led = 1;
+        else if( GREEN_state & LED_BLINK ) 
+            GREEN_led = !GREEN_led;
 
+        if( BLUE_state & LED_OFF ) 
+            BLUE_led = 0;
+        else if( BLUE_state & LED_ON ) 
+            BLUE_led = 1;
+        else if( BLUE_state & LED_BLINK ) 
+            BLUE_led = !BLUE_led;
+        
+        if( RED_state & LED_OFF ) 
+            RED_led = 0;
+        else if( RED_state & LED_ON ) 
+            RED_led = 1;
+        else if( RED_state & LED_BLINK ) 
+            RED_led = !RED_led;
 
-
-
-
-
-
+        lv_tick_inc(blink_interval); //Tell LittelvGL that "tick_interval" milliseconds were elapsed
+        ThisThread::sleep_for(blink_interval);  //in msec
+        }
+}
+*/
 
 /*
 
