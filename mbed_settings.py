@@ -29,7 +29,7 @@ from os.path import join, abspath, dirname
 
 # GCC ARM
 #GCC_ARM_PATH = ""
-GCC_ARM_PATH = "E:\General Programs\9 2019-q4-major\bin"
+GCC_ARM_PATH = "C:\Program Files (x86)\GNU Tools Arm Embedded\9 2019-q4-major\bin"
 
 # GCC CodeRed
 #GCC_CR_PATH = "C:/code_red/RedSuite_4.2.0_349/redsuite/Tools/bin"

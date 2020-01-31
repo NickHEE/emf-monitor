@@ -11,6 +11,8 @@
 
 #include "mbed.h"
 #include "arm_math.h"
+#include "MMC5603NJ.h"
+
 #ifdef USE_MQTT
 #include "iothubtransportmqtt.h"
 #else
@@ -388,31 +390,42 @@ int main(void)
     printf("\r\n");
     printf("This is the Nick Version 4\n");
 
-    if (platform_init() != 0) {
-       printf("Error initializing the platform\r\n");
-       return -1;
-       }
+    // if (platform_init() != 0) {
+    //    printf("Error initializing the platform\r\n");
+    //    return -1;
+    //    }
 
     XNucleoIKS01A2 *mems_expansion_board = XNucleoIKS01A2::instance(I2C_SDA, I2C_SCL, D4, D5);
     mag = mems_expansion_board->magnetometer;
-    mems_init();
+    //mems_init();
 
-    screen = new ST7735(D10, D9, D11, D13);
-    RST_pin = 0; wait_ms(50);
-    RST_pin = 1; wait_ms(50);
-    screen->initR(INITR_GREENTAB);
-    screen->setRotation(0);wait_ms(100);
-    screen->fillScreen(ST7735_BLACK); // have as other color for testing purposes
+    // screen = new ST7735(D10, D9, D11, D13);
+    // RST_pin = 0; wait_ms(50);
+    // RST_pin = 1; wait_ms(50);
+    // screen->initR(INITR_GREENTAB);
+    // screen->setRotation(0);wait_ms(100);
+    // screen->fillScreen(ST7735_BLACK); // have as other color for testing purposes
 
-    UI_thread.start(screen_task);
-    mag_sensor_thread.start(get_mag_reading);
-    azure_client_thread.start(azure_task);
+    // UI_thread.start(screen_task);
+    // mag_sensor_thread.start(get_mag_reading);
+    // azure_client_thread.start(azure_task);
 
-    mag_sensor_thread.join();
-    azure_client_thread.join();
-    UI_thread.join();
+    // mag_sensor_thread.join();
+    // azure_client_thread.join();
+    // UI_thread.join();
 
-    platform_deinit();
+    //platform_deinit();
+
+    I2C i2c = I2C(I2C_SDA, I2C_SCL);
+    MMC5603NJ magSensor = MMC5603NJ(i2c, 140);
+    int test;
+
+    while (true) {
+        test = magSensor.getProductID();
+        printf("Product ID: %d\n", test);
+        ThisThread::sleep_for(1000);
+    }
+
     printf(" - - - - - - - ALL DONE - - - - - - - \n");
     return 0;
 }
