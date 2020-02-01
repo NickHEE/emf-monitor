@@ -17,7 +17,31 @@
 #include "button.hpp"
 #include "azure_certs.h"
 
-Mutex magMutex;
+#define APP_VERSION "1.2"
+#define IOT_AGENT_OK CODEFIRST_OK
+static const char* connectionString = "HostName=XXXX;DeviceId=xxxx;SharedAccessKey=xxxx";
+static const char* deviceId         = "xxxx"; /*must match the one on connectionString*/
+// to report F uncomment this #define CTOF(x)         (((double)(x)*9/5)+32)
+#define CTOF(x)         (x)
+Thread azure_client_thread(osPriorityNormal, 8*1024, NULL, "azure_client_thread");
+/* create the GPS elements for example program */
+static void azure_task(void);
+gps_data gdata; 
+bg96_gps gps;   
+/* LED Management */
+DigitalOut   RED_led(LED1);
+DigitalOut   BLUE_led(LED2);
+DigitalOut   GREEN_led(LED3);
+const int    blink_interval = 500; //msec
+int          RED_state, BLUE_state, GREEN_state;
+#define GREEN       4  //0 0100 GREEN
+#define BLUE        2  //0 0010
+#define RED         1  //0 0001 RED
+#define LED_ON      8  //0 1xxx
+#define LED_BLINK  16  //1 xxxx
+#define LED_OFF     0  //0 0xxx
+#define SET_LED(l,s) (l##_led = ((l##_state=s)&LED_ON)? 1: 0)
+int counter = 0;
 
 
 #include "ST7735/ST7735.h" // from Rolland Kamp: https://os.mbed.com/users/rolo644u/code/ST7735/file/291ac9fb4d64/ST7735.cpp
@@ -36,11 +60,14 @@ int global_magnitude = 0;
 int global_max_magnitude = 10;
 int global_battery_val = 35;
 char global_name[] = "Joseph";
+Mutex magMutex;
 
 
-/*
 #include "lvgl/lvgl.h" // from littlevGL: https://littlevgl.com/download
 #include "lv_examples-master\lv_tutorial\1_hello_world\lv_tutorial_hello_world.h"
+#include "lv_examples-master\lv_tutorial\2_objects\lv_tutorial_objects.h"
+
+
 #define LVGL_TICK 5
 #define TICKER_TIME 0.001*LVGL_TICK
 Ticker ticker;
@@ -49,40 +76,19 @@ void display_init(void);
 void lv_ticker_func();
 static void my_disp_flush_cb(lv_disp_drv_t* disp_drv, const lv_area_t* area, lv_color_t* color_p);
 const int tick_interval = 500;
-*/
+void main_screen(void);
+static void label_refresher_task(void * p);
+
+Thread ticker_thread(osPriorityNormal, 8*1024, NULL, "ticker_thread");
+static void ticker_task(void);
+static void btn_event_cb(lv_obj_t * btn, lv_event_t event);
 
 
-
-
-#define APP_VERSION "1.2"
-#define IOT_AGENT_OK CODEFIRST_OK
-static const char* connectionString = "HostName=XXXX;DeviceId=xxxx;SharedAccessKey=xxxx";
-static const char* deviceId         = "xxxx"; /*must match the one on connectionString*/
-// to report F uncomment this #define CTOF(x)         (((double)(x)*9/5)+32)
-#define CTOF(x)         (x)
-Thread azure_client_thread(osPriorityNormal, 8*1024, NULL, "azure_client_thread");
-static void azure_task(void);
-/* LED Management */
-DigitalOut   RED_led(LED1);
-DigitalOut   BLUE_led(LED2);
-DigitalOut   GREEN_led(LED3);
-const int    blink_interval = 500; //msec
-int          RED_state, BLUE_state, GREEN_state;
-/* create the GPS elements for example program */
-gps_data gdata; 
-bg96_gps gps;   
-#define GREEN       4  //0 0100 GREEN
-#define BLUE        2  //0 0010
-#define RED         1  //0 0001 RED
-#define LED_ON      8  //0 1xxx
-#define LED_BLINK  16  //1 xxxx
-#define LED_OFF     0  //0 0xxx
-#define SET_LED(l,s) (l##_led = ((l##_state=s)&LED_ON)? 1: 0)
 
 // The LED thread simply manages the LED's on an on-going basis
 static void screen_task(void)
 {
-    // draw magnetometer information to screen
+   // draw magnetometer information to screen
    int magnitude = 0; // variable to simulate magnetometer measurements
    int row_for_mag = 8;
    int col_for_mag = 9;
@@ -101,7 +107,6 @@ static void screen_task(void)
    num_to_screen(row_for_max_mag,col_for_max_mag,old_global_max,max_mag_length);
    single_char(row_for_max_mag,col_for_max_mag+mag_length,&m[0][0]);
    single_char(row_for_max_mag,col_for_max_mag+mag_length+1,&G_[0][0]);
-
 
    // draw battery information to screen
    int battery_value = 98;
@@ -129,6 +134,9 @@ static void screen_task(void)
    while (true) {
        // update values on screen
         magMutex.lock();
+        // make local copy of global variables here (so mutex does not lock out variables for too long)
+        
+        magMutex.unlock();
         num_to_screen(row_for_mag,col_for_mag,global_magnitude,mag_length);
         num_to_screen(row_for_bat,col_for_bat+4,global_battery_val, bat_length);
 
@@ -143,7 +151,7 @@ static void screen_task(void)
            num_to_screen(row_for_max_mag,col_for_max_mag,global_max_magnitude,max_mag_length);
            old_global_max = global_max_magnitude;
         }
-        magMutex.unlock();
+        
         ThisThread::sleep_for(screen_update);  //in msec
         }
 }
@@ -166,7 +174,7 @@ int main(void) /////////////////////////////////////////////////////////////////
     printf("    **  **     Azure IoTClient Example, version %s\r\n", APP_VERSION);
     printf("   **    **    by AVNET\r\n");
     printf("  ** ==== **   \r\n\n");
-    printf("Identifier #45\n");
+    printf("Identifier #46\n");
     // end of initial program verification
 
     // initialize screen
@@ -176,25 +184,40 @@ int main(void) /////////////////////////////////////////////////////////////////
     screen->initR(INITR_GREENTAB);
     screen->setRotation(0);wait_ms(100);
     screen->fillScreen(ST7735_BLACK); // have as other color for testing purposes
-    screen_thread.start(screen_task);
-    printf("done initialization of screen\n");
-    // done screen initialization
-    
+
 
 /*
-    //azure_client_thread.start(azure_task);
-    //azure_client_thread.join();
-wait_ms(1000);
-printf("attempting LittleVGL thing\n");
-
-// things that need to be done for LittleVGL thing
-    display_init(); // done earlier
-    ticker.attach(callback(&lv_ticker_func),TICKER_TIME);
- 
-    lv_tutorial_hello_world(); 
+    float test_value = 123456.788;
+    char tmp[9];
+    sprintf(tmp, "%.2f", test_value);
+    string_to_screen(10,1,tmp, 5);
 */
 
-printf("made it to infinite loop");
+printf("attempting LittleVGL thing\n");
+// things that need to be done for LittleVGL thing
+    display_init(); 
+
+//ticker.attach(callback(&lv_ticker_func),TICKER_TIME);
+
+//lv_tutorial_objects();
+//lv_tutorial_hello_world(); 
+main_screen();
+ticker_thread.start(ticker_task);
+
+lv_task_create(label_refresher_task, 100, LV_TASK_PRIO_MID, NULL);
+
+
+
+// stop here for now
+printf("infinity loop now\n");
+while(1){}
+
+    screen_thread.start(screen_task);
+    printf("done initialization of screen\n");
+
+    //azure_client_thread.start(azure_task);
+    //azure_client_thread.join();
+    printf("made it to infinite loop\n");
     while(true)
     { }
     //LED_thread.terminate();
@@ -204,13 +227,10 @@ printf("made it to infinite loop");
 }
 
 
-
-
 void single_char(int line, int col, const short *single_char)
 {
     screen->drawOneChar(SPACING + col*(SPACING + CHAR_COL),  SPACING + line*(SPACING + CHAR_ROW), single_char);
 }
-
 
 // line/col = positioning of text box on screen (line = y axis, col = x axis)
 // magnitude = length of value to write to screen
@@ -293,6 +313,12 @@ void string_to_screen(int line, int col, char *string_array, int string_length)
             index++;
             col++;
             continue;
+        }else if ((string_array[index] == '.'))
+        {
+            screen->drawOneChar(SPACING + col*(SPACING + CHAR_COL),  SPACING + line*(SPACING + CHAR_ROW), &period[0][0]);
+            index++;
+            col++;
+            continue;
         }
 
         // discard other values
@@ -323,15 +349,223 @@ void string_to_screen(int line, int col, char *string_array, int string_length)
 
 
 
-
-
-
-
-
-
+static void ticker_task(void)
+{
+    while(1)
+    {
+       // printf("tick %d\n", counter++);
+       
+lv_tick_inc(LVGL_TICK); 
+    //Call lv_tick_inc(x) every x milliseconds in a Timer or Task (x should be between 1 and 10). 
+    //It is required for the internal timing of LittlevGL.
+ lv_task_handler(); 
+    //Call lv_task_handler() periodically every few milliseconds. 
+    //It will redraw the screen if required, handle input devices etc.
+    ThisThread::sleep_for(LVGL_TICK);  //in msec
+    }
+}
 
 
 /*
+int global_magnitude = 0;
+int global_max_magnitude = 10;
+int global_battery_val = 35;
+char global_name[] = "Joseph";
+Mutex magMutex;
+*/
+lv_obj_t * current_EMF_val;
+lv_obj_t * max_EMF_val;
+lv_obj_t * battery_val;
+lv_obj_t * name_val;
+
+static void label_refresher_task(void * p)
+{
+    //printf("ping %d\n", global_magnitude++);
+    global_magnitude++;
+
+    static int local_magnitude;
+    static int local_max_magnitude;
+    static int local_battery_val;
+    static char * local_name;
+
+    // only update screen if previous values get changed
+    static uint32_t prev_value_current_EMF = 0;
+    static uint32_t prev_value_max_EMF = 0;
+    static uint32_t prev_value_bat = 0;
+    static char * prev_value_name = &global_name[0];
+    static char buf[32];
+
+// make local copy of variables
+    magMutex.lock();
+    local_magnitude = global_magnitude;
+    local_max_magnitude = global_max_magnitude;
+    local_battery_val = global_battery_val;
+    local_name = &global_name[0];
+    magMutex.unlock();
+
+
+
+    // update present EMF value
+    if(prev_value_current_EMF != global_magnitude) {
+
+        if(lv_obj_get_screen(current_EMF_val) == lv_scr_act()) {
+            sprintf(buf, "%d", global_magnitude);
+            lv_label_set_text(current_EMF_val, buf);
+        }
+        prev_value_current_EMF = global_max_magnitude;
+    }
+    
+    // update max EMF value
+    if(prev_value_max_EMF != global_max_magnitude) {
+
+        if(lv_obj_get_screen(current_EMF_val) == lv_scr_act()) {
+            sprintf(buf, "%d", global_max_magnitude);
+            lv_label_set_text(max_EMF_val, buf);
+        }
+        prev_value_max_EMF = global_max_magnitude;
+    }
+
+    // update battery % value
+    if(prev_value_bat != global_battery_val) {
+
+        if(lv_obj_get_screen(battery_val) == lv_scr_act()) {
+            sprintf(buf, "%d", global_battery_val);
+            lv_label_set_text(battery_val, buf);
+        }
+        prev_value_bat = global_battery_val;
+    }
+
+    // update employee name
+    if(prev_value_name != &global_name[0]) {
+
+        if(lv_obj_get_screen(name_val) == lv_scr_act()) {
+            sprintf(buf, "%s", global_name);
+            lv_label_set_text(name_val, buf);
+        }
+        prev_value_name = &global_name[0];
+    }
+}
+
+void main_screen(void)
+{
+    lv_obj_t * scr = lv_disp_get_scr_act(NULL);     /*Get the current screen*/
+
+	static lv_style_t style_new;                         /*Styles can't be local variables*/
+    lv_style_copy(&style_new, &lv_style_pretty);         /*Copy a built-in style as a starting point*/
+	style_new.text.font = &lv_font_roboto_12;
+	
+    /*Create a Label on the currently active screen*/
+    current_EMF_val =  lv_label_create(scr, NULL);
+    lv_obj_set_style(current_EMF_val, &style_new);   
+
+    max_EMF_val =  lv_label_create(scr, NULL);
+    lv_obj_set_style(max_EMF_val, &style_new); 
+
+    battery_val =  lv_label_create(scr, NULL);
+    lv_obj_set_style(battery_val, &style_new); 
+
+    name_val =  lv_label_create(scr, NULL);
+    lv_obj_set_style(name_val, &style_new);  
+
+    /* Align the Label to the center
+     * NULL means align on parent (which is the screen now)
+     * 0, 0 at the end means an x, y offset after alignment*/
+    //lv_obj_align(current_EMF_val, NULL, LV_ALIGN_CENTER, 0, 0);
+
+	lv_obj_t * label;
+    lv_obj_t * current_EMF_label;
+    lv_obj_t * max_EMF_label;
+    lv_obj_t * battery_label;
+    lv_obj_t * name_label;
+
+    /*Create a Label on the currently active screen*/
+    current_EMF_label =  lv_label_create(scr, NULL); lv_obj_set_style(current_EMF_label, &style_new);
+    max_EMF_label =  lv_label_create(scr, NULL); lv_obj_set_style(max_EMF_label, &style_new);
+    battery_label =  lv_label_create(scr, NULL); lv_obj_set_style(battery_label, &style_new);
+    name_label =  lv_label_create(scr, NULL); lv_obj_set_style(name_label, &style_new);
+
+// place location of main menu text items:
+// current EMF value
+    lv_label_set_text(current_EMF_label, "Present:               mG");  
+    lv_obj_set_y(current_EMF_label, 60);
+    lv_obj_set_x(current_EMF_label, 10);
+
+    lv_label_set_text(current_EMF_val, "000000");
+	lv_obj_align(current_EMF_val, current_EMF_label, LV_ALIGN_OUT_BOTTOM_RIGHT, -20, -14);
+    lv_label_set_align(current_EMF_val,LV_LABEL_ALIGN_RIGHT);
+
+// maximum EMF value
+    lv_label_set_text(max_EMF_label, "Max:               mG");  
+    lv_obj_set_y(max_EMF_label, 75);
+    lv_obj_set_x(max_EMF_label, 10);
+
+    lv_label_set_text(max_EMF_val, "000000");
+	lv_obj_align(max_EMF_val, max_EMF_label, LV_ALIGN_OUT_BOTTOM_RIGHT, -20, -14);
+    lv_label_set_align(max_EMF_val,LV_LABEL_ALIGN_RIGHT);
+
+// Name
+    lv_label_set_text(name_label, "Name: ");  
+    lv_obj_set_y(name_label, 25);
+    lv_obj_set_x(name_label, 10);
+
+    lv_label_set_text(name_val, "Joseph");
+	lv_obj_align(name_val, name_label, LV_ALIGN_OUT_RIGHT_MID, 0, 0);
+    //lv_label_set_align(name_val,LV_LABEL_ALIGN_RIGHT);
+
+// Battery
+    lv_label_set_text(battery_label, "Bat:        %");  
+    lv_obj_set_y(battery_label, 10);
+    lv_obj_set_x(battery_label, 10);
+
+    lv_label_set_text(battery_val, "100");
+	lv_obj_align(battery_val, battery_label, LV_ALIGN_OUT_RIGHT_MID, -32, 0);
+    //lv_label_set_align(battery_val,LV_LABEL_ALIGN_RIGHT);
+    
+   
+
+    
+    lv_obj_t * btn1 = lv_btn_create(lv_disp_get_scr_act(NULL), NULL);           /*Create a button on the currently loaded screen*/
+    lv_obj_set_event_cb(btn1, btn_event_cb);                                    /*Set function to be called when the button is released*/
+    lv_obj_align(btn1, NULL, LV_ALIGN_CENTER, 0, 0);                            /*Align below the label*/
+
+    label = lv_label_create(btn1, NULL);
+    lv_label_set_text(label, "Menu1");
+    lv_btn_set_toggle(btn1, true);
+    //lv_btn_toggle(btn1);
+
+
+    lv_obj_t * obj3;
+    obj3 = lv_obj_create(scr, NULL);
+    lv_obj_set_pos(obj3, 10, 105);
+	lv_obj_set_size(obj3, 45,17);
+    lv_obj_set_style(obj3, &style_new);
+    /* Add a label to the object.
+     * Labels by default inherit the parent's style */
+    label = lv_label_create(obj3, NULL);
+    lv_label_set_text(label, "Menu");
+    lv_obj_align(label, NULL, LV_ALIGN_CENTER, 0, 0);
+}
+
+/**
+ * Called when a button is released
+ * @param btn pointer to the released button
+ * @param event the triggering event
+ * @return LV_RES_OK because the object is not deleted in this function
+ */
+static void btn_event_cb(lv_obj_t * btn, lv_event_t event)
+{
+    if(event == LV_EVENT_CLICKED) {
+        /*Increase the button width*/
+        //lv_coord_t width = lv_obj_get_width(btn);
+        //lv_obj_set_width(btn, width + 20);
+        printf("Clicked\n");
+    }
+    else if (event == LV_EVENT_VALUE_CHANGED)
+    {
+        printf("Toggled\n");
+    }
+}
+
 
 void display_init(void){
     lv_init();                                  //Initialize the LittlevGL
@@ -342,12 +576,14 @@ void display_init(void){
     //Implement and register a function which can copy a pixel array to an area of your display
     lv_disp_drv_t disp_drv;                     //Descriptor of a display driver
     lv_disp_drv_init(&disp_drv);                //Basic initialization
-    disp_drv.flush_cb = my_disp_flush_cb;       //Set your driver function
     disp_drv.buffer = &disp_buf;                //Assign the buffer to the display
-    lv_disp_drv_register(&disp_drv);            //Finally register the driver
+    disp_drv.flush_cb = my_disp_flush_cb;       //Set your driver function
+    lv_disp_t *disp;
+    disp = lv_disp_drv_register(&disp_drv);     //Finally register the driver
 }
 
 void lv_ticker_func(){
+    printf("tick %d\n", counter++);
     lv_tick_inc(LVGL_TICK); 
     //Call lv_tick_inc(x) every x milliseconds in a Timer or Task (x should be between 1 and 10). 
     //It is required for the internal timing of LittlevGL.
@@ -371,7 +607,7 @@ void my_disp_flush_cb(lv_disp_drv_t* disp_drv, const lv_area_t* area, lv_color_t
     lv_disp_flush_ready(disp_drv);
 }
 
-*/
+
 
 
 

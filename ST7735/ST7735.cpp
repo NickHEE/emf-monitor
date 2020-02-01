@@ -41,7 +41,7 @@ ST7735::ST7735(PinName cePin, PinName dcPin, PinName mosiPin, PinName sclkPin)
 void ST7735::initSPI()
 {
     spi->format(8,0);         // 8 bits, Mode 0
-    spi->frequency(20000000);  // SPI clock frequency
+    spi->frequency(60000000);  // SPI clock frequency
 }
 
 // Write data word 
