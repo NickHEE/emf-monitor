@@ -64,8 +64,8 @@ Mutex magMutex;
 
 
 #include "lvgl/lvgl.h" // from littlevGL: https://littlevgl.com/download
-#include "lv_examples-master\lv_tutorial\1_hello_world\lv_tutorial_hello_world.h"
-#include "lv_examples-master\lv_tutorial\2_objects\lv_tutorial_objects.h"
+//#include "lv_examples-master\lv_tutorial\1_hello_world\lv_tutorial_hello_world.h"
+//#include "lv_examples-master\lv_tutorial\2_objects\lv_tutorial_objects.h"
 
 
 #define LVGL_TICK 5
