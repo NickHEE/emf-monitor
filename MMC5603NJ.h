@@ -32,6 +32,11 @@
 #define CTRL_0_CONTINUOUS_AUTO_SR 0xA0
 #define CTRL_0_CONTINUOUS 0x80
 
+#define CTRL_1_BW_75HZ 0x00
+#define CTRL_1_BW_150HZ 0x01
+#define CTRL_1_BW_255HZ 0x02
+#define CTRL_1_BW_1000HZ 0x03
+
 #define CTRL_2_CONTINUOUS_START 0x10
 
 
@@ -39,16 +44,18 @@ class MMC5603NJ {
 
 public:
 
-    MMC5603NJ (I2C ext_i2c, PinName sda, PinName, scl);
+    MMC5603NJ (I2C* ext_i2c, int odr);
 
     bool setODR(int odr);
+    bool setBW(int BW);
     bool startContinuousMode();
     int getProductID();
-    float getMag();
+    //float getMag();
+
+    I2C* i2c;
 
 private:
 
-    I2C i2c;
     int _odr;
 
-}
+};

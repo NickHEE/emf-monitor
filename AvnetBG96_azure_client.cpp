@@ -416,8 +416,8 @@ int main(void)
 
     //platform_deinit();
 
-    I2C i2c = I2C(I2C_SDA, I2C_SCL);
-    MMC5603NJ magSensor = MMC5603NJ(i2c, 140);
+    I2C i2c(I2C_SDA, I2C_SCL);
+    MMC5603NJ magSensor = MMC5603NJ(&i2c, 140);
     int test;
 
     while (true) {
