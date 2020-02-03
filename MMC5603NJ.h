@@ -1,4 +1,5 @@
 #include "mbed.h"
+#include "arm_math.h"
 
 // Register Addresses
 #define X_OUT_0 	0x00 
@@ -39,17 +40,22 @@
 
 #define CTRL_2_CONTINUOUS_START 0x10
 
+#define STATUS_1_MEAS_DONE 0x40
+
+// Misc
+
 
 class MMC5603NJ { 
 
 public:
 
-    MMC5603NJ (I2C* ext_i2c, int odr);
+    MMC5603NJ (I2C* ext_i2c, int odr, int BW);
 
     bool setODR(int odr);
     bool setBW(int BW);
     bool startContinuousMode();
     int getProductID();
+    float32_t getMeasurement();
     //float getMag();
 
     I2C* i2c;
@@ -57,5 +63,5 @@ public:
 private:
 
     int _odr;
-
+    float32_t sensitivity = 0.0625;
 };

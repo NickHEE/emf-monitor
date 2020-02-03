@@ -417,13 +417,21 @@ int main(void)
     //platform_deinit();
 
     I2C i2c(I2C_SDA, I2C_SCL);
-    MMC5603NJ magSensor = MMC5603NJ(&i2c, 140);
+    MMC5603NJ magSensor = MMC5603NJ(&i2c, 140, CTRL_1_BW_150HZ);
     int test;
 
+    float32_t FIRstate[BLOCK_SIZE + NUM_TAPS - 1];
+    arm_fir_instance_f32 FIRfilter;
+    arm_fir_init_f32(&FIRfilter, NUM_TAPS, (float32_t *) &filterCoeffs[0], &FIRstate[0], BLOCK_SIZE);
+
+    float32_t magI;
+    float32_t magO;  
+
+    magSensor.startContinuousMode();
     while (true) {
-        test = magSensor.getProductID();
-        printf("Product ID: %d\n", test);
-        ThisThread::sleep_for(1000);
+        magI = magSensor.getMeasurement();
+        arm_fir_f32(&FIRfilter, &magI, &magO, BLOCK_SIZE);
+        printf("%f\n", magO);
     }
 
     printf(" - - - - - - - ALL DONE - - - - - - - \n");
