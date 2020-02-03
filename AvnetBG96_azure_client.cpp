@@ -417,7 +417,7 @@ int main(void)
     //platform_deinit();
 
     I2C i2c(I2C_SDA, I2C_SCL);
-    MMC5603NJ magSensor = MMC5603NJ(&i2c, 140, CTRL_1_BW_150HZ);
+    MMC5603NJ magSensor = MMC5603NJ(&i2c, 140, CTRL_1_BW_255HZ);
     int test;
 
     float32_t FIRstate[BLOCK_SIZE + NUM_TAPS - 1];
@@ -430,8 +430,8 @@ int main(void)
     magSensor.startContinuousMode();
     while (true) {
         magI = magSensor.getMeasurement();
-        arm_fir_f32(&FIRfilter, &magI, &magO, BLOCK_SIZE);
-        printf("%f\n", magO);
+        //arm_fir_f32(&FIRfilter, &magI, &magO, BLOCK_SIZE);
+        printf("%f\n", magI);
     }
 
     printf(" - - - - - - - ALL DONE - - - - - - - \n");

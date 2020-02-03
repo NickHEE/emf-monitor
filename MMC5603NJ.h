@@ -32,6 +32,7 @@
 // Register Configurations
 #define CTRL_0_CONTINUOUS_AUTO_SR 0xA0
 #define CTRL_0_CONTINUOUS 0x80
+#define CTRL_0_TAKE_MEASUREMENT 0x01
 
 #define CTRL_1_BW_75HZ 0x00
 #define CTRL_1_BW_150HZ 0x01
@@ -54,8 +55,10 @@ public:
     bool setODR(int odr);
     bool setBW(int BW);
     bool startContinuousMode();
+    bool takeMeasurement();
     int getProductID();
     float32_t getMeasurement();
+
     //float getMag();
 
     I2C* i2c;

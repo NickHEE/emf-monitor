@@ -60,6 +60,17 @@ int MMC5603NJ::getProductID() {
     return -1;
 }
 
+bool MMC5603NJ::takeMeasurement() {
+    char data[2]
+    data[0] = CTRL_0;
+    data[1] = CTRL_0_TAKE_MEASUREMENT;
+
+    if (!i2c->write(MMC5603NJ_WRITE, data, 2)) {
+        return true;
+    }
+    return false;
+}
+
 float32_t MMC5603NJ::getMeasurement() {
 
     char status_reg = STATUS_1;
@@ -72,7 +83,7 @@ float32_t MMC5603NJ::getMeasurement() {
     do {
         if (!i2c->write(MMC5603NJ_WRITE, &status_reg, 1)) {
             i2c->read(MMC5603NJ_READ, &status, 1);
-            //printf("STATUS: %d", status);
+            //printf("STATUS: %d\n", status);
         }
     }
     while(!(status & 0x40));
