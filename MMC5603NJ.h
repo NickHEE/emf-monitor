@@ -57,7 +57,7 @@ public:
     bool startContinuousMode();
     bool takeMeasurement();
     int getProductID();
-    float32_t getMeasurement();
+    float32_t getMeasurement(bool wait);
 
     //float getMag();
 

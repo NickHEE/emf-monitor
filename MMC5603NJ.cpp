@@ -61,7 +61,7 @@ int MMC5603NJ::getProductID() {
 }
 
 bool MMC5603NJ::takeMeasurement() {
-    char data[2]
+    char data[2];
     data[0] = CTRL_0;
     data[1] = CTRL_0_TAKE_MEASUREMENT;
 
@@ -71,7 +71,7 @@ bool MMC5603NJ::takeMeasurement() {
     return false;
 }
 
-float32_t MMC5603NJ::getMeasurement() {
+float32_t MMC5603NJ::getMeasurement(bool wait) {
 
     char status_reg = STATUS_1;
     char status;
@@ -80,13 +80,17 @@ float32_t MMC5603NJ::getMeasurement() {
     char axisData[9];
     char xout0 = X_OUT_0;
     
-    do {
-        if (!i2c->write(MMC5603NJ_WRITE, &status_reg, 1)) {
-            i2c->read(MMC5603NJ_READ, &status, 1);
-            //printf("STATUS: %d\n", status);
-        }
+    // Wait until the measurement ready bit is set in the status register
+    if (wait) {
+        do {
+            if (!i2c->write(MMC5603NJ_WRITE, &status_reg, 1)) {
+                i2c->read(MMC5603NJ_READ, &status, 1);
+                //printf("STATUS: %d\n", status);
+            }
+        }   
+        while(!(status & 0x40));
     }
-    while(!(status & 0x40));
+    
 
     if (!i2c->write(MMC5603NJ_WRITE, &xout0, 1)) {
         i2c->read(MMC5603NJ_READ, axisData, 9);

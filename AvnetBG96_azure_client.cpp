@@ -427,11 +427,14 @@ int main(void)
     float32_t magI;
     float32_t magO;  
 
-    magSensor.startContinuousMode();
+    //magSensor.startContinuousMode();
     while (true) {
-        magI = magSensor.getMeasurement();
-        //arm_fir_f32(&FIRfilter, &magI, &magO, BLOCK_SIZE);
-        printf("%f\n", magI);
+        magSensor.takeMeasurement();
+        ThisThread::sleep_for(2);
+        magI = magSensor.getMeasurement(false);
+        arm_fir_f32(&FIRfilter, &magI, &magO, BLOCK_SIZE);
+        printf("%f\n", magO);
+        ThisThread::sleep_for(5);
     }
 
     printf(" - - - - - - - ALL DONE - - - - - - - \n");
