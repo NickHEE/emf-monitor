@@ -47,7 +47,7 @@ std::vector<float> magSamples;
 std::vector<float> magReadings;
 std::vector<float> magAverages;
 
-float magCurrent;
+float32_t magCurrent;
 float magSessionMax;
 float mag1minAvg;
 float magSessionAvg;
@@ -151,13 +151,18 @@ void get_mag_reading(void) {
         // Filter the mag data to isolate the 60Hz component
         arm_fir_f32(&FIRfilter, &magIn, &magOut, BLOCK_SIZE);
         magSamples.push_back( (float) magOut );
+        //printf("Filt: %f\n", magOut);
 
         // Buffer ~3 cycles of 60Hz data and calculate the RMS value
         if (magSamples.size() >= FILTER_BUFFER_SIZE) {
             
             magMutex.lock();
 
-            arm_rms_f32(&magOut, FILTER_BUFFER_SIZE, &magCurrent);
+            float* samplePtr = &magSamples[0];
+            float32_t samples[FILTER_BUFFER_SIZE];
+            std::copy(samplePtr, samplePtr+FILTER_BUFFER_SIZE, samples);
+
+            arm_rms_f32(samples, FILTER_BUFFER_SIZE, &magCurrent);
             printf("%f\n", magCurrent);
 
             if (ThisThread::flags_get() & MAG_IS_RECORDING) {
