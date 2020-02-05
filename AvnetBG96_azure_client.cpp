@@ -127,31 +127,37 @@ void mag_recording_start_ISR(void) {
 
 void get_mag_reading(void) {
 
-    int32_t axisData[3];
+    I2C i2c(I2C_SDA, I2C_SCL);
+    MMC5603NJ magSensor = MMC5603NJ(&i2c, 140, CTRL_1_BW_255HZ);
 
+    // Initialize ARM FIR filter object
     float32_t FIRstate[BLOCK_SIZE + NUM_TAPS - 1];
     arm_fir_instance_f32 FIRfilter;
     arm_fir_init_f32(&FIRfilter, NUM_TAPS, (float32_t *) &filterCoeffs[0], &FIRstate[0], BLOCK_SIZE);  
 
     mag_sample_ticker.attach(&mag_sample_ISR, 0.0071);
 
-
     while (true) {
 
+        // Wait for the mag_sample_ticker to trigger
         ThisThread::flags_wait_any(MAG_TAKE_MEASUREMENT);
 
-        mag->take_m_single_measurement();
-        mag->get_m_axes(axisData);
-        magIn = sqrt(pow((float32_t)axisData[0], 2) + pow((float32_t)axisData[1], 2) + pow((float32_t)axisData[2], 2));
+        // Start a measurement and wait for it to complete.
+        // BW: 0x00 - 6.6ms, 0x01 - 3.5ms, 0x02 - 2.0ms, 0x03 - 1.2ms
+        magSensor.takeMeasurement();
+        ThisThread::sleep_for(T_WAIT_BW_150);
+        magIn = magSensor.getMeasurement(false);
 
+        // Filter the mag data to isolate the 60Hz component
         arm_fir_f32(&FIRfilter, &magIn, &magOut, BLOCK_SIZE);
         magSamples.push_back( (float) magOut );
 
+        // Buffer ~3 cycles of 60Hz data and calculate the RMS value
         if (magSamples.size() >= FILTER_BUFFER_SIZE) {
             
             magMutex.lock();
 
-            magCurrent = std::accumulate(magSamples.begin(), magSamples.end(), 0.0) / FILTER_BUFFER_SIZE;
+            arm_rms_f32(&magOut, FILTER_BUFFER_SIZE, &magCurrent);
             printf("%f\n", magCurrent);
 
             if (ThisThread::flags_get() & MAG_IS_RECORDING) {
@@ -395,10 +401,6 @@ int main(void)
     //    return -1;
     //    }
 
-    XNucleoIKS01A2 *mems_expansion_board = XNucleoIKS01A2::instance(I2C_SDA, I2C_SCL, D4, D5);
-    mag = mems_expansion_board->magnetometer;
-    //mems_init();
-
     // screen = new ST7735(D10, D9, D11, D13);
     // RST_pin = 0; wait_ms(50);
     // RST_pin = 1; wait_ms(50);
@@ -407,35 +409,14 @@ int main(void)
     // screen->fillScreen(ST7735_BLACK); // have as other color for testing purposes
 
     // UI_thread.start(screen_task);
-    // mag_sensor_thread.start(get_mag_reading);
-    // azure_client_thread.start(azure_task);
+    mag_sensor_thread.start(get_mag_reading);
+    azure_client_thread.start(azure_task);
 
-    // mag_sensor_thread.join();
-    // azure_client_thread.join();
+    mag_sensor_thread.join();
+    azure_client_thread.join();
     // UI_thread.join();
 
     //platform_deinit();
-
-    I2C i2c(I2C_SDA, I2C_SCL);
-    MMC5603NJ magSensor = MMC5603NJ(&i2c, 140, CTRL_1_BW_255HZ);
-    int test;
-
-    float32_t FIRstate[BLOCK_SIZE + NUM_TAPS - 1];
-    arm_fir_instance_f32 FIRfilter;
-    arm_fir_init_f32(&FIRfilter, NUM_TAPS, (float32_t *) &filterCoeffs[0], &FIRstate[0], BLOCK_SIZE);
-
-    float32_t magI;
-    float32_t magO;  
-
-    //magSensor.startContinuousMode();
-    while (true) {
-        magSensor.takeMeasurement();
-        ThisThread::sleep_for(2);
-        magI = magSensor.getMeasurement(false);
-        arm_fir_f32(&FIRfilter, &magI, &magO, BLOCK_SIZE);
-        printf("%f\n", magO);
-        ThisThread::sleep_for(5);
-    }
 
     printf(" - - - - - - - ALL DONE - - - - - - - \n");
     return 0;

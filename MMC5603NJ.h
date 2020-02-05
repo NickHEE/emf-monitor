@@ -44,6 +44,11 @@
 #define STATUS_1_MEAS_DONE 0x40
 
 // Misc
+#define T_WAIT_BW_75 6.6
+#define T_WAIT_BW_150 3.5
+#define T_WAIT_BW_255 2.0
+#define T_WAIT_BW_HPOWER 1.2
+
 
 
 class MMC5603NJ { 
