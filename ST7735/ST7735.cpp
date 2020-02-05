@@ -415,6 +415,13 @@ void ST7735::fillRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color
  ce->write(1);
 }
 
+// just stick inputted color onto spi bus
+void ST7735::output_color(uint8_t hi, uint8_t lo)
+{
+  spi->write(hi);
+  spi->write(lo);
+}
+
 // fill a rectangle
 void ST7735::fillRectBar(int16_t x, int16_t y, int16_t w, int16_t h, short array[10][50]) {
 

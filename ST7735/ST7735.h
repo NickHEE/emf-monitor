@@ -127,6 +127,7 @@ public:
 	void init_old();
     uint8_t tabcolor;      
     uint8_t colstart, rowstart; // some displays need this changed
+    void output_color(uint8_t hi, uint8_t lo);
     void initB();
     void initR(uint8_t options);
     void setRotation(uint8_t m);
@@ -166,7 +167,7 @@ public:
     void fillRectBar(int16_t x, int16_t y, int16_t w, int16_t h, short array[10][50]) ;
 	void drawOneChar(int16_t x, int16_t y, const short *num);
 	
-	private: 
+	 
     SPI*    spi;
     DigitalOut* ce;
     DigitalOut* rst;

@@ -453,19 +453,11 @@ void main_screen(void)
 	static lv_style_t style_new;                         /*Styles can't be local variables*/
     lv_style_copy(&style_new, &lv_style_pretty);         /*Copy a built-in style as a starting point*/
 	style_new.text.font = &lv_font_roboto_12;
-	
-    /*Create a Label on the currently active screen*/
-    current_EMF_val =  lv_label_create(scr, NULL);
-    lv_obj_set_style(current_EMF_val, &style_new);   
 
-    max_EMF_val =  lv_label_create(scr, NULL);
-    lv_obj_set_style(max_EMF_val, &style_new); 
-
-    battery_val =  lv_label_create(scr, NULL);
-    lv_obj_set_style(battery_val, &style_new); 
-
-    name_val =  lv_label_create(scr, NULL);
-    lv_obj_set_style(name_val, &style_new);  
+	static lv_style_t style_big_font;
+    lv_style_copy(&style_big_font, &lv_style_pretty);
+    style_big_font.text.font = &lv_font_roboto_22;
+ 
 
     /* Align the Label to the center
      * NULL means align on parent (which is the screen now)
@@ -478,44 +470,61 @@ void main_screen(void)
     lv_obj_t * battery_label;
     lv_obj_t * name_label;
 
-    /*Create a Label on the currently active screen*/
-    current_EMF_label =  lv_label_create(scr, NULL); lv_obj_set_style(current_EMF_label, &style_new);
-    max_EMF_label =  lv_label_create(scr, NULL); lv_obj_set_style(max_EMF_label, &style_new);
-    battery_label =  lv_label_create(scr, NULL); lv_obj_set_style(battery_label, &style_new);
-    name_label =  lv_label_create(scr, NULL); lv_obj_set_style(name_label, &style_new);
+    // label = support text for value e.g. "EMF: "
+    // val = value itself             e.g. "144"
+    current_EMF_val =  lv_label_create(scr, NULL);
+    lv_obj_set_style(current_EMF_val, &style_big_font);   
+    current_EMF_label =  lv_label_create(scr, NULL); 
+    lv_obj_set_style(current_EMF_label, &style_big_font);
+
+    max_EMF_val =  lv_label_create(scr, NULL);
+    lv_obj_set_style(max_EMF_val, &style_new); 
+    max_EMF_label =  lv_label_create(scr, NULL); 
+    lv_obj_set_style(max_EMF_label, &style_new);
+
+    battery_val =  lv_label_create(scr, NULL);
+    lv_obj_set_style(battery_val, &style_new); 
+    battery_label =  lv_label_create(scr, NULL); 
+    lv_obj_set_style(battery_label, &style_new);
+
+    name_val =  lv_label_create(scr, NULL);
+    lv_obj_set_style(name_val, &style_new); 
+    name_label =  lv_label_create(scr, NULL); 
+    lv_obj_set_style(name_label, &style_new);
+
 
 // place location of main menu text items:
 // current EMF value
-    lv_label_set_text(current_EMF_label, "Present:               mG");  
-    lv_obj_set_y(current_EMF_label, 60);
-    lv_obj_set_x(current_EMF_label, 10);
+    lv_label_set_text(current_EMF_label, "                mG");  
+    lv_obj_set_y(current_EMF_label, 25);
+    lv_obj_set_x(current_EMF_label, 1);
 
-    lv_label_set_text(current_EMF_val, "000000");
-	lv_obj_align(current_EMF_val, current_EMF_label, LV_ALIGN_OUT_BOTTOM_RIGHT, -20, -14);
+    lv_label_set_text(current_EMF_val, "00000");
+	lv_obj_align(current_EMF_val, current_EMF_label, LV_ALIGN_OUT_BOTTOM_RIGHT, -35, -26);
     lv_label_set_align(current_EMF_val,LV_LABEL_ALIGN_RIGHT);
 
 // maximum EMF value
     lv_label_set_text(max_EMF_label, "Max:               mG");  
-    lv_obj_set_y(max_EMF_label, 75);
-    lv_obj_set_x(max_EMF_label, 10);
+    lv_obj_set_y(max_EMF_label, 46);
+    lv_obj_set_x(max_EMF_label, 1);
 
-    lv_label_set_text(max_EMF_val, "000000");
+    lv_label_set_text(max_EMF_val, "00000");
 	lv_obj_align(max_EMF_val, max_EMF_label, LV_ALIGN_OUT_BOTTOM_RIGHT, -20, -14);
     lv_label_set_align(max_EMF_val,LV_LABEL_ALIGN_RIGHT);
 
 // Name
-    lv_label_set_text(name_label, "Name: ");  
-    lv_obj_set_y(name_label, 25);
-    lv_obj_set_x(name_label, 10);
+    lv_label_set_text(name_label, "ID: ");  
+    lv_obj_set_y(name_label, 13);
+    lv_obj_set_x(name_label, 1);
 
     lv_label_set_text(name_val, "Joseph");
 	lv_obj_align(name_val, name_label, LV_ALIGN_OUT_RIGHT_MID, 0, 0);
     //lv_label_set_align(name_val,LV_LABEL_ALIGN_RIGHT);
 
 // Battery
-    lv_label_set_text(battery_label, "Bat:        %");  
-    lv_obj_set_y(battery_label, 10);
-    lv_obj_set_x(battery_label, 10);
+    lv_label_set_text(battery_label, LV_SYMBOL_BATTERY_3 "        %" );  
+    lv_obj_set_y(battery_label, 1);
+    lv_obj_set_x(battery_label, 1);
 
     lv_label_set_text(battery_val, "100");
 	lv_obj_align(battery_val, battery_label, LV_ALIGN_OUT_RIGHT_MID, -32, 0);
@@ -527,23 +536,28 @@ void main_screen(void)
     lv_obj_t * btn1 = lv_btn_create(lv_disp_get_scr_act(NULL), NULL);           /*Create a button on the currently loaded screen*/
     lv_obj_set_event_cb(btn1, btn_event_cb);                                    /*Set function to be called when the button is released*/
     lv_obj_align(btn1, NULL, LV_ALIGN_CENTER, 0, 0);                            /*Align below the label*/
+    lv_obj_set_style(btn1, &style_new);
 
     label = lv_label_create(btn1, NULL);
-    lv_label_set_text(label, "Menu1");
+    lv_label_set_text(label, "Menu");
     lv_btn_set_toggle(btn1, true);
+    lv_obj_set_y(btn1, 95);
+    lv_obj_set_x(btn1, 1);
+    lv_obj_set_size(btn1, 45,17);
     //lv_btn_toggle(btn1);
 
-
+/*
     lv_obj_t * obj3;
     obj3 = lv_obj_create(scr, NULL);
     lv_obj_set_pos(obj3, 10, 105);
 	lv_obj_set_size(obj3, 45,17);
     lv_obj_set_style(obj3, &style_new);
-    /* Add a label to the object.
-     * Labels by default inherit the parent's style */
+    // Add a label to the object.
+     // Labels by default inherit the parent's style 
     label = lv_label_create(obj3, NULL);
     lv_label_set_text(label, "Menu");
     lv_obj_align(label, NULL, LV_ALIGN_CENTER, 0, 0);
+    */
 }
 
 /**
@@ -595,14 +609,30 @@ void lv_ticker_func(){
 void my_disp_flush_cb(lv_disp_drv_t* disp_drv, const lv_area_t* area, lv_color_t* color_p)
 {
     //The most simple case (but also the slowest) to put all pixels to the screen one-by-one
-    uint16_t x, y;
+    uint16_t x = area->x1; 
+    uint16_t y = area->y1;
+    uint8_t hi, lo;
+    screen->setAddrWindow(x, y, x+(area->x2-area->x1), y+(area->y2-area->y1));
+    screen->dc->write(1);
+    screen->ce->write(0);
+
+    //wait_ms(10);
+ 
     for(y = area->y1; y <= area->y2; y++) {
         for(x = area->x1; x <= area->x2; x++) {
             //put_px(x, y, *color_p)
-            screen->drawPixel( x, y, color_p->full);
+            hi = color_p->full >> 8;
+		    lo = color_p->full;
+		
+            screen->spi->write(hi);
+            screen->spi->write(lo);
+
+
+            //screen->drawPixel( x, y, color_p->full);
             color_p++;
         }
     }
+    screen->ce->write(1);
     //IMPORTANT!!!* Inform the graphics library that you are ready with the flushing
     lv_disp_flush_ready(disp_drv);
 }
