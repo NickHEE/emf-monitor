@@ -12,6 +12,8 @@
 #include "mbed.h"
 #include "arm_math.h"
 #include "MMC5603NJ.h"
+#include "lvgl/lvgl.h"
+#include "ST7735/ST7735.h"
 
 #ifdef USE_MQTT
 #include "iothubtransportmqtt.h"
@@ -27,18 +29,18 @@
 #include "filter.h"
 #include "azure_certs.h"
 
-#include "ST7735/ST7735.h" // from Rolland Kamp: https://os.mbed.com/users/rolo644u/code/ST7735/file/291ac9fb4d64/ST7735.cpp
-                           //   modified to have functions suitable for this project
-#include "screen_char_things.h"
-
-#define APP_VERSION "1.2"
 #define IOT_AGENT_OK CODEFIRST_OK
+#define APP_VERSION "1.2"
 
 #define MAG_TAKE_MEASUREMENT 1
 #define MAG_IS_RECORDING 2
 #define MAG_TAKE_1_MIN_AVERAGE 4
+#define MAG_AZURE_READY 8
 
 #define AZURE_TRANSMIT 1
+
+#define LVGL_TICK 5
+#define TICKER_TIME 0.001*LVGL_TICK
 
 float32_t magIn;
 float32_t magOut;
@@ -51,17 +53,28 @@ float32_t magCurrent;
 float magSessionMax;
 float mag1minAvg;
 float magSessionAvg;
+int global_battery_val = 35;
+char global_name[] = "Joseph";
+
+lv_obj_t * current_EMF_val;
+lv_obj_t * max_EMF_val;
+lv_obj_t * battery_val;
+lv_obj_t * name_val;
+ST7735* screen;
 
 Mutex magMutex;
 
 Ticker mag_sample_ticker;
 Ticker mag_1_min_avg_ticker;
+Ticker ticker; //Joseph
+const int tick_interval = 500;
 
-ST7735* screen;
-const int screen_update = 250;
 DigitalOut   RST_pin(D8);
-int global_battery_val = 35;
-char global_name[] = "Joseph";
+DigitalOut   cePin(D10);
+DigitalOut   dcPin(D9);
+DigitalOut   mosiPin(D11);
+DigitalOut   sclkPin(D13);
+SPI* spi = new SPI(D11, NC, D13); 
 
 /* The following is the message we will be sending to Azure */
 typedef struct IoTDevice_t {
@@ -87,352 +100,35 @@ typedef struct IoTDevice_t {
      "\"TOD\":\"%s UTC\""          \
    "}"
 
-/* initialize the expansion board && sensors */
-
-#define ENV_SENSOR "IKS01A2"
-#include "XNucleoIKS01A2.h"
-static HTS221Sensor   *hum_temp;
-static LSM6DSLSensor  *acc_gyro;
-static LPS22HBSensor  *pressure;
-static LSM303AGRMagSensor *mag;
-
 static const char* connectionString = "HostName=iotc-9fb34c7f-5eb6-4b1a-be18-eae9abab68fd.azure-devices.net;DeviceId=bpd0gzmw17;SharedAccessKey=tRThrVckItU1N17T1gKnnrrdb+bmRyurJvGEl7cVhIs=";
- 
 static const char* deviceId               = "bpd0gzmw17"; /*must match the one on connectionString*/
 
 Thread azure_client_thread(osPriorityNormal, 8*1024, NULL, "azure_client_thread"); // @suppress("Type cannot be resolved")
 Thread mag_sensor_thread(osPriorityHigh, 8*1024, NULL, "mag_sensor_thread");
-Thread UI_thread(osPriorityNormal, 8*1024, NULL, "UI_thread");
+Thread ticker_thread(osPriorityNormal, 8*1024, NULL, "ticker_thread");
 
 static void azure_task(void);
+void get_mag_reading(void);
+void display_init(void);
 
-
-
-void string_to_screen(int line, int col, char *string_array, int str_length);
-void num_to_screen(int line, int col, int magnitude, int data_length);
-void single_char(int line, int col, const short *single_char);
-
-void mems_init(void) {
- 
-    mag->set_m_low_power_mode();  
-}
+static void ticker_task(void);
+static void btn_event_cb(lv_obj_t * btn, lv_event_t event);
+static void my_disp_flush_cb(lv_disp_drv_t* disp_drv, const lv_area_t* area, lv_color_t* color_p);
+void main_screen(void);
+static void label_refresher_task(void * p);
 
 void mag_sample_ISR(void) {
 
     mag_sensor_thread.signal_set(MAG_TAKE_MEASUREMENT);
 }
 
+void mag_average_ISR(void) {
+
+    mag_sensor_thread.signal_set(MAG_TAKE_1_MIN_AVERAGE);
+}
+
 void mag_recording_start_ISR(void) {
 }
-
-void get_mag_reading(void) {
-
-    I2C i2c(I2C_SDA, I2C_SCL);
-    MMC5603NJ magSensor = MMC5603NJ(&i2c, 140, CTRL_1_BW_255HZ);
-
-    // Initialize ARM FIR filter object
-    float32_t FIRstate[BLOCK_SIZE + NUM_TAPS - 1];
-    arm_fir_instance_f32 FIRfilter;
-    arm_fir_init_f32(&FIRfilter, NUM_TAPS, (float32_t *) &filterCoeffs[0], &FIRstate[0], BLOCK_SIZE);  
-
-    mag_sample_ticker.attach(&mag_sample_ISR, 0.0071);
-
-    while (true) {
-
-        // Wait for the mag_sample_ticker to trigger
-        ThisThread::flags_wait_any(MAG_TAKE_MEASUREMENT);
-
-        // Start a measurement and wait for it to complete.
-        // BW: 0x00 - 6.6ms, 0x01 - 3.5ms, 0x02 - 2.0ms, 0x03 - 1.2ms
-        magSensor.takeMeasurement();
-        ThisThread::sleep_for(T_WAIT_BW_150);
-        magIn = magSensor.getMeasurement(false);
-
-        // Filter the mag data to isolate the 60Hz component
-        arm_fir_f32(&FIRfilter, &magIn, &magOut, BLOCK_SIZE);
-        magSamples.push_back( (float) magOut );
-        //printf("Filt: %f\n", magOut);
-
-        // Buffer ~3 cycles of 60Hz data and calculate the RMS value
-        if (magSamples.size() >= FILTER_BUFFER_SIZE) {
-            
-            magMutex.lock();
-
-            float* samplePtr = &magSamples[0];
-            float32_t samples[FILTER_BUFFER_SIZE];
-            std::copy(samplePtr, samplePtr+FILTER_BUFFER_SIZE, samples);
-
-            arm_rms_f32(samples, FILTER_BUFFER_SIZE, &magCurrent);
-            printf("%f\n", magCurrent);
-
-            if (ThisThread::flags_get() & MAG_IS_RECORDING) {
-                magReadings.push_back(magCurrent);
-                if (magCurrent > magSessionMax) {
-                    magSessionMax = magCurrent;
-                }
-            }
-
-            magMutex.unlock();
-            magSamples.clear();    
-        }
-
-        if (ThisThread::flags_get() & MAG_TAKE_1_MIN_AVERAGE) {
-            
-            mag1minAvg = std::accumulate(magReadings.begin(), magReadings.end(), 0.0) / magReadings.size();
-        
-            magMutex.lock();
-            // Maybe we should just store all the 1 min averages of a session
-            magSessionAvg = (magSessionAvg + mag1minAvg) / 2;
-            magMutex.unlock();
-            magReadings.clear();
-
-            azure_client_thread.signal_set(AZURE_TRANSMIT);
-        }
-    }   
-}
-
-static void screen_task(void)
-{
-    // draw magnetometer information to screen
-   int magnitude = 0; // variable to simulate magnetometer measurements
-   int max_magnitude = 0;
-   int row_for_mag = 8;
-   int col_for_mag = 9;
-   int mag_length = 5;
-   string_to_screen(row_for_mag, col_for_mag-8, "CURRENT:", 8);
-   num_to_screen(row_for_mag,col_for_mag,magnitude,mag_length);
-   single_char(row_for_mag,col_for_mag+mag_length,&m[0][0]);
-   single_char(row_for_mag,col_for_mag+mag_length+1,&G_[0][0]);
-
-    // draw max magnetometer information to screen
-   int row_for_max_mag = 9;
-   int col_for_max_mag = 9;
-   int max_mag_length = 5;
-   int old_global_max = 0;
-   string_to_screen(row_for_max_mag, col_for_max_mag-4, "MAX:", 4);
-   num_to_screen(row_for_max_mag,col_for_max_mag,old_global_max,max_mag_length);
-   single_char(row_for_max_mag,col_for_max_mag+mag_length,&m[0][0]);
-   single_char(row_for_max_mag,col_for_max_mag+mag_length+1,&G_[0][0]);
-
-
-   // draw battery information to screen
-   int battery_value = 98;
-   int row_for_bat = 1;
-   int col_for_bat = 1;
-   int bat_length = 3;
-   string_to_screen(row_for_bat, col_for_bat, "BAT:", 4);
-   num_to_screen(row_for_bat,col_for_bat+4,battery_value, bat_length);
-   single_char(row_for_bat,col_for_bat+bat_length+4,&percent[0][0]);
-
-   // draw name information to screen
-   char name[] = "Nicholas";
-   char *last_name = name;
-   int row_for_name = 2;
-   int col_for_name = 1;
-   string_to_screen(row_for_name, col_for_name, "ID:", 3);
-   string_to_screen(row_for_name, col_for_name+3, name, 12);
-
-   // draw LTE connection information to screen
-   int row_for_LTE = 1;
-   int col_for_LTE = 15;
-   string_to_screen(row_for_LTE, col_for_LTE, "LTE:", 4);
-   single_char(row_for_LTE, col_for_LTE+4, &LTE_3bar[0][0]);
-
-   while (true) {
-       // update values on screen
-        magMutex.lock();
-        magnitude = (int) magCurrent;
-        max_magnitude = (int) magSessionMax;
-        magMutex.unlock();
-
-        num_to_screen(row_for_mag,col_for_mag,magnitude,mag_length);
-        num_to_screen(row_for_bat,col_for_bat+4,global_battery_val, bat_length);
-
-        if (last_name != &global_name[0])
-        {
-            string_to_screen(row_for_name, col_for_name+3, global_name, 12);
-            last_name = &global_name[0];
-        }
-
-        if (max_magnitude > old_global_max)
-        {
-           num_to_screen(row_for_max_mag,col_for_max_mag,max_magnitude,max_mag_length);
-           old_global_max = max_magnitude;
-        }
-        
-        ThisThread::sleep_for(screen_update);  //in msec
-        }
-}
-
-void single_char(int line, int col, const short *single_char)
-{
-    screen->drawOneChar(SPACING + col*(SPACING + CHAR_COL),  SPACING + line*(SPACING + CHAR_ROW), single_char);
-}
-
-
-// line/col = positioning of text box on screen (line = y axis, col = x axis)
-// magnitude = length of value to write to screen
-// data_length = number of digits (max) you expect this number to occupy e.g. a value from 0 - 100 requires data_length = 3
-//      NOTE: max data_length is 10 digits
-void num_to_screen(int line, int col, int magnitude, int data_length)
-{
-    static const int max_data_len = 10;
-    const short *data[max_data_len];
-    long max_val = 1;
-    for (int i = 0; i < data_length; i++)
-    {
-        max_val*=10;
-    }
-      
-    // data sanitization (only positive numbers allowed for now)
-    if (magnitude < 0)
-        magnitude = 0;
-    if (magnitude >= max_val)
-        magnitude = max_val-1;
-    if (line < 0)
-        line = 0;
-    if (col < 0)
-        col = 0;
-
-    // split data into array, separated by digit position
-    for (int i = (10 - 1); i >= 0; i--)
-        {
-        data[i] = numbers[magnitude % 10];
-        magnitude /= 10;
-        }
-
-      // put digits on led_display, mG
-      for (int i = (max_data_len-data_length); i < max_data_len; i++)
-         {
-         screen->drawOneChar(SPACING + col*(SPACING + CHAR_COL),  SPACING + line*(SPACING + CHAR_ROW), data[i]);
-         col++;
-         }
-         
-}
-
-// line/col = positioning of text box on screen (line = y axis, col = x axis)
-// string_array = string to display on screen. Can handle alpha-numeric characters and some special characters
-//     charcters it does not know will be skipped
-void string_to_screen(int line, int col, char *string_array, int string_length)
-   {
-       int index = 0;
-       int letter_val;
-       bool is_letter;
-    while(string_array[index] != '\0')
-    {
-        is_letter = 1;
-        letter_val = string_array[index];
-
-        // handle lowercase values
-        if ((string_array[index] >= 'a') && (string_array[index] <= 'z'))
-           letter_val -= 'a'; // offset needed to convert lowercase to uppercase in ASCII
-
-        // handle uppercase values
-        else if ((string_array[index] >= 'A') && (string_array[index] <= 'Z'))
-            letter_val -= 'A'; // offset needed to zero-index uppercase letters (e.g. 'A' = index of 0)
-        
-        // handle numbers
-        else if ((string_array[index] >= '0') && (string_array[index] <= '9'))
-        {
-            letter_val -= '0'; // offset needed to zero-index numbers
-            is_letter = 0;
-        }        
-
-        // handle special characters
-        if ((string_array[index] == ' '))
-        {
-            screen->drawOneChar(SPACING + col*(SPACING + CHAR_COL),  SPACING + line*(SPACING + CHAR_ROW), &space[0][0]);
-            index++;
-            col++;
-            continue;
-        } else if ((string_array[index] == ':'))
-        {
-            screen->drawOneChar(SPACING + col*(SPACING + CHAR_COL),  SPACING + line*(SPACING + CHAR_ROW), &colon[0][0]);
-            index++;
-            col++;
-            continue;
-        }
-
-        // discard other values
-        if (letter_val >= 26)
-        {
-            index++;
-            continue; // something that will break program
-        }
-        
-        // draw alpha-numeric characters, then increment index (to access next character) and col (to move where next char will be drawn)
-        if (is_letter == 1)
-            screen->drawOneChar(SPACING + col*(SPACING + CHAR_COL),  SPACING + line*(SPACING + CHAR_ROW), letters[letter_val]);
-        else 
-            screen->drawOneChar(SPACING + col*(SPACING + CHAR_COL),  SPACING + line*(SPACING + CHAR_ROW), numbers[letter_val]);
-        index++;
-        col++;
-    }   
-
-    // fill remainder of field in blank space
-    while (index < string_length)
-    {
-    screen->drawOneChar(SPACING + col*(SPACING + CHAR_COL),  SPACING + line*(SPACING + CHAR_ROW), &space[0][0]);
-    index++;
-    col++;
-    }
-}
-
-
-// The main routine simply prints a banner, initializes the system
-// starts the worker threads and waits for a termination (join)
-
-int main(void)
-{
-    printf("\r\n");
-    printf("     ****\r\n");
-    printf("    **  **     Azure IoTClient Example, version %s\r\n", APP_VERSION);
-    printf("   **    **    by AVNET\r\n");
-    printf("  ** ==== **   \r\n");
-    printf("\r\n");
-    printf("The example program interacts with Azure IoTHub sending \r\n");
-    printf("sensor data and receiving messeages (using ARM Mbed OS v5.x)\r\n");
-    printf("->using %s Environmental Sensor\r\n", ENV_SENSOR);
-    #ifdef IOTHUBTRANSPORTHTTP_H
-        printf("->using HTTPS Transport Protocol\r\n");
-    #else
-        printf("->using MQTT Transport Protocol\r\n");
-    #endif
-    printf("\r\n");
-    printf("This is the Nick Version 4\n");
-
-    // if (platform_init() != 0) {
-    //    printf("Error initializing the platform\r\n");
-    //    return -1;
-    //    }
-
-    // screen = new ST7735(D10, D9, D11, D13);
-    // RST_pin = 0; wait_ms(50);
-    // RST_pin = 1; wait_ms(50);
-    // screen->initR(INITR_GREENTAB);
-    // screen->setRotation(0);wait_ms(100);
-    // screen->fillScreen(ST7735_BLACK); // have as other color for testing purposes
-
-    // UI_thread.start(screen_task);
-    mag_sensor_thread.start(get_mag_reading);
-    azure_client_thread.start(azure_task);
-
-    mag_sensor_thread.join();
-    azure_client_thread.join();
-    // UI_thread.join();
-
-    //platform_deinit();
-
-    printf(" - - - - - - - ALL DONE - - - - - - - \n");
-    return 0;
-}
-
-//
-// This function sends the actual message to azure
-//
-//
-// *************************************************************
-//  AZURE STUFF...
 
 char* makeMessage(IoTDevice* iotDev)
 {
@@ -460,7 +156,6 @@ char* makeMessage(IoTDevice* iotDev)
     return ptr;
 }
 
-
 void sendMessage(IOTHUB_CLIENT_LL_HANDLE iotHubClientHandle, char* buffer, size_t size)
 {
     IOTHUB_MESSAGE_HANDLE messageHandle = IoTHubMessage_CreateFromByteArray((const unsigned char*)buffer, size);
@@ -476,18 +171,394 @@ void sendMessage(IOTHUB_CLIENT_LL_HANDLE iotHubClientHandle, char* buffer, size_
     IoTHubMessage_Destroy(messageHandle);
 }
 
+int main(void)
+{
+    printf("\r\n");
+    printf("__________                                     __                       \n");
+    printf("\\______   \\ ____ _____________    ____ _____ _/  |_  ___________  ______\n");
+    printf("|       _// __ \\\\___   /\\__  \\  /    \\__  \\   __\\/  _ \\_  __ \\/  ___/\n");
+    printf("|    |   \\  ___/ /    /  / __ \\|   |  \\/ __ \\|  | (  <_> )  | \\/\\___\\\n");
+    printf("|____|_  /\\___  >_____ \\(____  /___|  (____  /__|  \\____/|__|  /____ >\n");
+    printf("        \\/     \\/      \\/     \\/     \\/     \\/                       \\/ \n");
+    printf("\r\n");
+    printf("\r\n");
+    printf("EMF MONITOR PROTOTYPE VERSION 1.0\n");
+    printf("\r\n");
+    
+    // Init Display
+    printf("Initializing Display...\n");
+    screen = new ST7735(D10, D9, D11, D13);
+    RST_pin = 0; wait_ms(50);
+    RST_pin = 1; wait_ms(50);
+    screen->initR(INITR_GREENTAB);
+    screen->setRotation(0);wait_ms(100);
+    screen->fillScreen(ST7735_BLACK); // have as other color for testing purposes
+    display_init(); 
+    main_screen();
+
+    // Start Threads
+    azure_client_thread.start(azure_task);
+    mag_sensor_thread.start(get_mag_reading);
+    mag_sensor_thread.signal_set(MAG_IS_RECORDING);
+    ticker_thread.start(ticker_task);
+    lv_task_create(label_refresher_task, 100, LV_TASK_PRIO_MID, NULL);
+    
+    mag_sensor_thread.join();
+    azure_client_thread.join();
+    ticker_thread.join();
+
+    platform_deinit();
+
+    return 0;
+}
+
+void get_mag_reading(void) {
+
+    I2C i2c(I2C_SDA, I2C_SCL);
+    MMC5603NJ magSensor = MMC5603NJ(&i2c, 140, CTRL_1_BW_255HZ);
+
+    // Initialize ARM FIR filter object
+    float32_t FIRstate[BLOCK_SIZE + NUM_TAPS - 1];
+    arm_fir_instance_f32 FIRfilter;
+    arm_fir_init_f32(&FIRfilter, NUM_TAPS, (float32_t *) &filterCoeffs[0], &FIRstate[0], BLOCK_SIZE);  
+
+    ThisThread::flags_wait_any(MAG_AZURE_READY);
+
+    mag_sample_ticker.attach(&mag_sample_ISR, 0.0071);
+    mag_1_min_avg_ticker.attach(&mag_average_ISR, 60);
+
+    while (true) {
+
+        // Wait for the mag_sample_ticker to trigger
+        ThisThread::flags_wait_any(MAG_TAKE_MEASUREMENT);
+
+        // Start a measurement and wait for it to complete.
+        // BW: 0x00 - 6.6ms, 0x01 - 3.5ms, 0x02 - 2.0ms, 0x03 - 1.2ms
+        magSensor.takeMeasurement();
+        ThisThread::sleep_for(T_WAIT_BW_150);
+        magIn = magSensor.getMeasurement(false);
+
+        // Filter the mag data to isolate the 60Hz component
+        arm_fir_f32(&FIRfilter, &magIn, &magOut, BLOCK_SIZE);
+        magSamples.push_back( (float) magOut );
+
+        // Buffer ~3 cycles of 60Hz data and calculate the RMS value
+        if (magSamples.size() >= FILTER_BUFFER_SIZE) {
+            
+            magMutex.lock();
+
+            // Jank - change this later
+            float* samplePtr = &magSamples[0];
+            float32_t samples[FILTER_BUFFER_SIZE];
+            std::copy(samplePtr, samplePtr+FILTER_BUFFER_SIZE, samples);
+
+            arm_rms_f32(samples, FILTER_BUFFER_SIZE, &magCurrent);
+            printf("%f\n", magCurrent);
+
+            if (ThisThread::flags_get() & MAG_IS_RECORDING) {
+                magReadings.push_back(magCurrent);
+                if (magCurrent > magSessionMax) {
+                    magSessionMax = magCurrent;
+                }
+            }
+
+            magMutex.unlock();
+            magSamples.clear();  
+        }
+
+        if (ThisThread::flags_get() & MAG_TAKE_1_MIN_AVERAGE) {
+            
+            mag1minAvg = std::accumulate(magReadings.begin(), magReadings.end(), 0.0) / magReadings.size();
+        
+            magMutex.lock();
+            // Maybe we should just store all the 1 min averages of a session
+            magSessionAvg = (magSessionAvg + mag1minAvg) / 2;
+            magMutex.unlock();
+            magReadings.clear();
+
+            ThisThread::flags_clear(MAG_TAKE_1_MIN_AVERAGE);
+            azure_client_thread.signal_set(AZURE_TRANSMIT);
+        }
+    }   
+}
+
+void display_init(void){
+    lv_init();                                  //Initialize the LittlevGL
+    static lv_disp_buf_t disp_buf;
+    static lv_color_t buf[LV_HOR_RES_MAX * 10]; //Declare a buffer for 10 lines                                                              
+    lv_disp_buf_init(&disp_buf, buf, NULL, LV_HOR_RES_MAX * 10); //Initialize the display buffer
+    
+    //Implement and register a function which can copy a pixel array to an area of your display
+    lv_disp_drv_t disp_drv;                     //Descriptor of a display driver
+    lv_disp_drv_init(&disp_drv);                //Basic initialization
+    disp_drv.buffer = &disp_buf;                //Assign the buffer to the display
+    disp_drv.flush_cb = my_disp_flush_cb;       //Set your driver function
+    lv_disp_t *disp;
+    disp = lv_disp_drv_register(&disp_drv);     //Finally register the driver
+}
+
+static void ticker_task(void)
+{
+    while(1)
+    {
+        // printf("tick %d\n", counter++);
+       
+        lv_tick_inc(LVGL_TICK); 
+        //Call lv_tick_inc(x) every x milliseconds in a Timer or Task (x should be between 1 and 10). 
+        //It is required for the internal timing of LittlevGL.
+        lv_task_handler(); 
+        //Call lv_task_handler() periodically every few milliseconds. 
+        //It will redraw the screen if required, handle input devices etc.
+        ThisThread::sleep_for(LVGL_TICK);  //in msec
+    }
+}
+
+static void label_refresher_task(void * p)
+{
+    //printf("ping %d\n", global_magnitude++);
+    //global_magnitude++;
+
+    static int local_magnitude;
+    static int local_max_magnitude;
+    static int local_battery_val;
+    static char * local_name;
+
+    // only update screen if previous values get changed
+    static uint32_t prev_value_current_EMF = 0;
+    static uint32_t prev_value_max_EMF = 0;
+    static uint32_t prev_value_bat = 0;
+    static char * prev_value_name = &global_name[0];
+    static char buf[32];
+
+// make local copy of variables
+    magMutex.lock();
+    local_magnitude = (int) magCurrent;
+    local_max_magnitude = (int) magSessionMax;
+    local_battery_val = global_battery_val;
+    local_name = &global_name[0];
+    magMutex.unlock();
+
+    // update present EMF value
+    if(prev_value_current_EMF != local_magnitude) {
+
+        if(lv_obj_get_screen(current_EMF_val) == lv_scr_act()) {
+            sprintf(buf, "%d", local_magnitude);
+            lv_label_set_text(current_EMF_val, buf);
+        }
+        prev_value_current_EMF = local_magnitude;
+    }
+    
+    // update max EMF value
+    if(prev_value_max_EMF != local_max_magnitude) {
+
+        if(lv_obj_get_screen(current_EMF_val) == lv_scr_act()) {
+            sprintf(buf, "%d", local_max_magnitude);
+            lv_label_set_text(max_EMF_val, buf);
+        }
+        prev_value_max_EMF = local_max_magnitude;
+    }
+
+    // update battery % value
+    if(prev_value_bat != local_battery_val) {
+
+        if(lv_obj_get_screen(battery_val) == lv_scr_act()) {
+            sprintf(buf, "%d", local_battery_val);
+            lv_label_set_text(battery_val, buf);
+        }
+        prev_value_bat = local_battery_val;
+    }
+
+    // update employee name
+    if(prev_value_name != &global_name[0]) {
+
+        if(lv_obj_get_screen(name_val) == lv_scr_act()) {
+            sprintf(buf, "%s", global_name);
+            lv_label_set_text(name_val, buf);
+        }
+        prev_value_name = &global_name[0];
+    }
+}
+
+void main_screen(void)
+{
+    lv_obj_t * scr = lv_disp_get_scr_act(NULL);     /*Get the current screen*/
+
+	static lv_style_t style_new;                         /*Styles can't be local variables*/
+    lv_style_copy(&style_new, &lv_style_pretty);         /*Copy a built-in style as a starting point*/
+	style_new.text.font = &lv_font_roboto_12;
+
+	static lv_style_t style_big_font;
+    lv_style_copy(&style_big_font, &lv_style_pretty);
+    style_big_font.text.font = &lv_font_roboto_22;
+ 
+
+    /* Align the Label to the center
+     * NULL means align on parent (which is the screen now)
+     * 0, 0 at the end means an x, y offset after alignment*/
+    //lv_obj_align(current_EMF_val, NULL, LV_ALIGN_CENTER, 0, 0);
+
+	lv_obj_t * label;
+    lv_obj_t * current_EMF_label;
+    lv_obj_t * max_EMF_label;
+    lv_obj_t * battery_label;
+    lv_obj_t * name_label;
+
+    // label = support text for value e.g. "EMF: "
+    // val = value itself             e.g. "144"
+    current_EMF_val =  lv_label_create(scr, NULL);
+    lv_obj_set_style(current_EMF_val, &style_big_font);   
+    current_EMF_label =  lv_label_create(scr, NULL); 
+    lv_obj_set_style(current_EMF_label, &style_big_font);
+
+    max_EMF_val =  lv_label_create(scr, NULL);
+    lv_obj_set_style(max_EMF_val, &style_new); 
+    max_EMF_label =  lv_label_create(scr, NULL); 
+    lv_obj_set_style(max_EMF_label, &style_new);
+
+    battery_val =  lv_label_create(scr, NULL);
+    lv_obj_set_style(battery_val, &style_new); 
+    battery_label =  lv_label_create(scr, NULL); 
+    lv_obj_set_style(battery_label, &style_new);
+
+    name_val =  lv_label_create(scr, NULL);
+    lv_obj_set_style(name_val, &style_new); 
+    name_label =  lv_label_create(scr, NULL); 
+    lv_obj_set_style(name_label, &style_new);
+
+
+// place location of main menu text items:
+// current EMF value
+    lv_label_set_text(current_EMF_label, "                mG");  
+    lv_obj_set_y(current_EMF_label, 25);
+    lv_obj_set_x(current_EMF_label, 1);
+
+    lv_label_set_text(current_EMF_val, "00000");
+	lv_obj_align(current_EMF_val, current_EMF_label, LV_ALIGN_OUT_BOTTOM_RIGHT, -35, -26);
+    lv_label_set_align(current_EMF_val,LV_LABEL_ALIGN_RIGHT);
+
+// maximum EMF value
+    lv_label_set_text(max_EMF_label, "Max:               mG");  
+    lv_obj_set_y(max_EMF_label, 46);
+    lv_obj_set_x(max_EMF_label, 1);
+
+    lv_label_set_text(max_EMF_val, "00000");
+	lv_obj_align(max_EMF_val, max_EMF_label, LV_ALIGN_OUT_BOTTOM_RIGHT, -20, -14);
+    lv_label_set_align(max_EMF_val,LV_LABEL_ALIGN_RIGHT);
+
+// Name
+    lv_label_set_text(name_label, "ID: ");  
+    lv_obj_set_y(name_label, 13);
+    lv_obj_set_x(name_label, 1);
+
+    lv_label_set_text(name_val, "Joseph");
+	lv_obj_align(name_val, name_label, LV_ALIGN_OUT_RIGHT_MID, 0, 0);
+    //lv_label_set_align(name_val,LV_LABEL_ALIGN_RIGHT);
+
+// Battery
+    lv_label_set_text(battery_label, LV_SYMBOL_BATTERY_3 "        %" );  
+    lv_obj_set_y(battery_label, 1);
+    lv_obj_set_x(battery_label, 1);
+
+    lv_label_set_text(battery_val, "100");
+	lv_obj_align(battery_val, battery_label, LV_ALIGN_OUT_RIGHT_MID, -32, 0);
+    //lv_label_set_align(battery_val,LV_LABEL_ALIGN_RIGHT);
+    
+   
+    lv_obj_t * btn1 = lv_btn_create(lv_disp_get_scr_act(NULL), NULL);           /*Create a button on the currently loaded screen*/
+    lv_obj_set_event_cb(btn1, btn_event_cb);                                    /*Set function to be called when the button is released*/
+    lv_obj_align(btn1, NULL, LV_ALIGN_CENTER, 0, 0);                            /*Align below the label*/
+    lv_obj_set_style(btn1, &style_new);
+
+    label = lv_label_create(btn1, NULL);
+    lv_label_set_text(label, "Menu");
+    lv_btn_set_toggle(btn1, true);
+    lv_obj_set_y(btn1, 95);
+    lv_obj_set_x(btn1, 1);
+    lv_obj_set_size(btn1, 45,17);
+    //lv_btn_toggle(btn1);
+
+/*
+    lv_obj_t * obj3;
+    obj3 = lv_obj_create(scr, NULL);
+    lv_obj_set_pos(obj3, 10, 105);
+	lv_obj_set_size(obj3, 45,17);
+    lv_obj_set_style(obj3, &style_new);
+    // Add a label to the object.
+     // Labels by default inherit the parent's style 
+    label = lv_label_create(obj3, NULL);
+    lv_label_set_text(label, "Menu");
+    lv_obj_align(label, NULL, LV_ALIGN_CENTER, 0, 0);
+    */
+}
+
+/**
+ * Called when a button is released
+ * @param btn pointer to the released button
+ * @param event the triggering event
+ * @return LV_RES_OK because the object is not deleted in this function
+ */
+static void btn_event_cb(lv_obj_t * btn, lv_event_t event)
+{
+    if(event == LV_EVENT_CLICKED) {
+        /*Increase the button width*/
+        //lv_coord_t width = lv_obj_get_width(btn);
+        //lv_obj_set_width(btn, width + 20);
+        printf("Clicked\n");
+    }
+    else if (event == LV_EVENT_VALUE_CHANGED)
+    {
+        printf("Toggled\n");
+    }
+}
+
+void my_disp_flush_cb(lv_disp_drv_t* disp_drv, const lv_area_t* area, lv_color_t* color_p)
+{
+    //The most simple case (but also the slowest) to put all pixels to the screen one-by-one
+    uint16_t x = area->x1; 
+    uint16_t y = area->y1;
+    uint8_t hi, lo;
+    screen->setAddrWindow(x, y, x+(area->x2-area->x1), y+(area->y2-area->y1));
+    // screen->dc->write(1);
+    // screen->ce->write(0);
+    dcPin = 1;
+    cePin = 0;
+
+    //wait_ms(10);
+ 
+    for(y = area->y1; y <= area->y2; y++) {
+        for(x = area->x1; x <= area->x2; x++) {
+            //put_px(x, y, *color_p)
+            hi = color_p->full >> 8;
+		    lo = color_p->full;
+		
+            // screen->spi->write(hi);
+            // screen->spi->write(lo);
+            spi->write(hi);
+            spi->write(lo);
+
+
+            //screen->drawPixel( x, y, color_p->full);
+            color_p++;
+        }
+    }
+    // screen->ce->write(1);
+    cePin.write(1);
+    //IMPORTANT!!!* Inform the graphics library that you are ready with the flushing
+    lv_disp_flush_ready(disp_drv);
+}
 
 void azure_task(void)
 {
-    bool transmit = false;
- 
-    int  k;
-    int  msg_sent=1;
-    u8_t magStatus;
 
-    //
+    if (platform_init() != 0) {
+       printf("Error initializing the platform\r\n");
+       return;
+    }
+
+    bool transmit = false;
+    int  msg_sent=1;
+
     // setup the iotDev struction contents...
-    //
     IoTDevice* iotDev = (IoTDevice*)malloc(sizeof(IoTDevice));
 
     if (iotDev == NULL) {
@@ -502,106 +573,69 @@ void azure_task(void)
     iotDev->TOD             = (char*)"";
     iotDev->MagneticField   = 0;
     iotDev->ElectricField   = 0;
-    iotDev->UserID          = (char*)"ILOVEBOBGILL69";
+    iotDev->UserID          = (char*)global_name;
 
-    // /* Setup IoTHub client configuration */
-    // #ifdef IOTHUBTRANSPORTHTTP_H
-    //     IOTHUB_CLIENT_LL_HANDLE iotHubClientHandle = IoTHubClient_LL_CreateFromConnectionString(connectionString, HTTP_Protocol);
-    // #else
-    //     IOTHUB_CLIENT_LL_HANDLE iotHubClientHandle = IoTHubClient_LL_CreateFromConnectionString(connectionString, MQTT_Protocol);
-    // #endif
+    /* Setup IoTHub client configuration */
+    #ifdef IOTHUBTRANSPORTHTTP_H
+        IOTHUB_CLIENT_LL_HANDLE iotHubClientHandle = IoTHubClient_LL_CreateFromConnectionString(connectionString, HTTP_Protocol);
+    #else
+        IOTHUB_CLIENT_LL_HANDLE iotHubClientHandle = IoTHubClient_LL_CreateFromConnectionString(connectionString, MQTT_Protocol);
+    #endif
 
-    // if (iotHubClientHandle == NULL) {
-    //     printf("Failed on IoTHubClient_Create\r\n");
-    //     return;
-    // }
+    if (iotHubClientHandle == NULL) {
+        printf("Failed on IoTHubClient_Create\r\n");
+        return;
+    }
 
-    //     // add the certificate information
-    // if (IoTHubClient_LL_SetOption(iotHubClientHandle, "TrustedCerts", certificates) != IOTHUB_CLIENT_OK)
-    //     printf("failure to set option \"TrustedCerts\"\r\n");
+        // add the certificate information
+    if (IoTHubClient_LL_SetOption(iotHubClientHandle, "TrustedCerts", certificates) != IOTHUB_CLIENT_OK)
+        printf("failure to set option \"TrustedCerts\"\r\n");
 
-    // #if MBED_CONF_APP_TELUSKIT == 1
-    //     if (IoTHubClient_LL_SetOption(iotHubClientHandle, "product_info", "TELUSIOTKIT") != IOTHUB_CLIENT_OK)
-    //         printf("failure to set option \"product_info\"\r\n");
-    // #endif
+    #if MBED_CONF_APP_TELUSKIT == 1
+        if (IoTHubClient_LL_SetOption(iotHubClientHandle, "product_info", "TELUSIOTKIT") != IOTHUB_CLIENT_OK)
+            printf("failure to set option \"product_info\"\r\n");
+    #endif
 
-    // #ifdef IOTHUBTRANSPORTHTTP_H
-    //     // polls will happen effectively at ~10 seconds.  The default value of minimumPollingTime is 25 minutes.
-    //     // For more information, see:
-    //     //     https://azure.microsoft.com/documentation/articles/iot-hub-devguide/#messaging
+    #ifdef IOTHUBTRANSPORTHTTP_H
+        // polls will happen effectively at ~10 seconds.  The default value of minimumPollingTime is 25 minutes.
+        // For more information, see:
+        //     https://azure.microsoft.com/documentation/articles/iot-hub-devguide/#messaging
 
-    //     unsigned int minimumPollingTime = 9;
-    //     if (IoTHubClient_LL_SetOption(iotHubClientHandle, "MinimumPollingTime", &minimumPollingTime) != IOTHUB_CLIENT_OK)
-    //         printf("failure to set option \"MinimumPollingTime\"\r\n");
-    // #endif
+        unsigned int minimumPollingTime = 9;
+        if (IoTHubClient_LL_SetOption(iotHubClientHandle, "MinimumPollingTime", &minimumPollingTime) != IOTHUB_CLIENT_OK)
+            printf("failure to set option \"MinimumPollingTime\"\r\n");
+    #endif
 
-    //     if (IoTHubClientCore_LL_SetRetryPolicy(iotHubClientHandle, IOTHUB_CLIENT_RETRY_NONE, 1) != IOTHUB_CLIENT_OK){
-    //         printf("failure to set retry option\n");
-    //     }
+        if (IoTHubClientCore_LL_SetRetryPolicy(iotHubClientHandle, IOTHUB_CLIENT_RETRY_NONE, 1) != IOTHUB_CLIENT_OK){
+            printf("failure to set retry option\n");
+        }
+
+    mag_sensor_thread.signal_set(MAG_AZURE_READY);
     
     while (true) {
 
         ThisThread::flags_wait_any(AZURE_TRANSMIT);
-        printf("Azure Thread!\n");
-        // t2.stop();
-        // printf("t:%d\n",(int)t2.read_us());
-        // t2.reset();
+        printf("Azure TX!\n");
         
-
         char*  msg;
         size_t msgSize;
-        // int32_t magData[3];
-
-        //hum_temp->get_temperature(&gtemp);           // get Temp
-        //hum_temp->get_humidity(&ghumid);             // get Humidity
-        //pressure->get_pressure(&gpress);             // get pressure
-        
-        // t.start();
-        // mag->take_m_single_measurement();
-        
-
-        // // Wait while for the measurement to complete - Nick
-        // while (magStatus != LSM303AGR_MAG_MD_IDLE2_MODE) {
-        //     mag->get_m_mode_status(&magStatus);
-        //     //printf("Status: %d", (int)magStatus);
-        // }
-        
-        // mag->get_m_axes(magData);
         
         // iotDev->MagneticField = (int) sqrt(pow(magData[0], 2) + pow(magData[1], 2) + pow(magData[2], 2));
-
-     // if( tilt_event ) {
-        //     tilt_event = 0;
-        //     iotDev->Tilt |= 1;
-        // }
-        // iotDev->Tilt &= 0x2;
-        // iotDev->ButtonPress = 0;
-
-        //iotDev->Temperature = CTOF(gtemp);
-        //iotDev->Humidity    = (int)ghumid;
-        //iotDev->Pressure    = (int)gpress;
-
 
         if (transmit) {
         
             printf("(%04d)",msg_sent++);
             msg = makeMessage(iotDev);
             msgSize = strlen(msg);
-            //sendMessage(iotHubClientHandle, msg, msgSize);
+            sendMessage(iotHubClientHandle, msg, msgSize);
             free(msg);
 
             /* schedule IoTHubClient to send events/receive commands */
-            //IoTHubClient_LL_DoWork(iotHubClientHandle);
+            IoTHubClient_LL_DoWork(iotHubClientHandle);
         }   
-
-        //ThisThread::sleep_for(30000);  //in msec // @suppress("Function cannot be resolved")
-        //printf("X:%d, Y:%d, Z:%d, RMS:%d, t:%f\n", (int)magData[0], (int)magData[1], (int)magData[2], iotDev->MagneticField, dt);
-
-        //printf('%d, %d\n', sampleRate - (int)dt, (int)dt);
-       
     }
 
     free(iotDev);
-    // IoTHubClient_LL_Destroy(iotHubClientHandle);
+    IoTHubClient_LL_Destroy(iotHubClientHandle);
     return;
 }
