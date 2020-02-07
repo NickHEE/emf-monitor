@@ -82,8 +82,8 @@ typedef struct IoTDevice_t {
     char* ObjectType;
     char* Version;
     const char* ReportingDevice;
-    int   MagneticField;
-    int   ElectricField;
+    float   MagneticField;
+    float   ElectricField;
     char* UserID;
     char* TOD;
 } IoTDevice;
@@ -94,17 +94,17 @@ typedef struct IoTDevice_t {
      "\"ObjectType\":\"%s\","      \
      "\"Version\":\"%s\","         \
      "\"ReportingDevice\":\"%s\"," \
-     "\"MagneticField\":\"%d\","   \
-     "\"ElectricField\":\"%d\","   \
+     "\"MagneticField\":\"%.1f\","   \
+     "\"ElectricField\":\"%.1f\","   \
      "\"UserID\":\"%s\","          \
      "\"TOD\":\"%s UTC\""          \
    "}"
 
-static const char* connectionString = "HostName=iotc-9fb34c7f-5eb6-4b1a-be18-eae9abab68fd.azure-devices.net;DeviceId=bpd0gzmw17;SharedAccessKey=tRThrVckItU1N17T1gKnnrrdb+bmRyurJvGEl7cVhIs=";
-static const char* deviceId               = "bpd0gzmw17"; /*must match the one on connectionString*/
+static const char* connectionString = "HostName=iotc-9fb34c7f-5eb6-4b1a-be18-eae9abab68fd.azure-devices.net;DeviceId=8znd9stgg;SharedAccessKey=m9S7AcxtVYzOekFuJL5z17xvwdTbR5w1xAaIW66clWA=";
+static const char* deviceId               = "8znd9stgg"; /*must match the one on connectionString*/
 
 Thread azure_client_thread(osPriorityNormal, 8*1024, NULL, "azure_client_thread"); // @suppress("Type cannot be resolved")
-Thread mag_sensor_thread(osPriorityHigh, 8*1024, NULL, "mag_sensor_thread");
+Thread mag_sensor_thread(osPriorityNormal, 8*1024, NULL, "mag_sensor_thread");
 Thread ticker_thread(osPriorityNormal, 8*1024, NULL, "ticker_thread");
 
 static void azure_task(void);
@@ -613,14 +613,17 @@ void azure_task(void)
     mag_sensor_thread.signal_set(MAG_AZURE_READY);
     
     while (true) {
-
+        printf("Done.\n");
         ThisThread::flags_wait_any(AZURE_TRANSMIT);
         printf("Azure TX!\n");
         
         char*  msg;
         size_t msgSize;
         
-        // iotDev->MagneticField = (int) sqrt(pow(magData[0], 2) + pow(magData[1], 2) + pow(magData[2], 2));
+        magMutex.lock();
+        iotDev->MagneticField = mag1minAvg;
+        iotDev->ElectricField = mag1minAvg;
+        magMutex.unlock();
 
         if (transmit) {
         
