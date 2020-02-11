@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
-//#define USE_MQTT
+#define USE_MQTT
 //py -2 -m mbed compile -m NUCLEO_L496ZG -t GCC_ARM --profile toolchain_debug.json
 
 #include <stdlib.h>
@@ -82,8 +82,8 @@ typedef struct IoTDevice_t {
     char* ObjectType;
     char* Version;
     const char* ReportingDevice;
-    int   MagneticField;
-    int   ElectricField;
+    float   MagneticField;
+    float   ElectricField;
     char* UserID;
     char* TOD;
 } IoTDevice;
@@ -94,14 +94,14 @@ typedef struct IoTDevice_t {
      "\"ObjectType\":\"%s\","      \
      "\"Version\":\"%s\","         \
      "\"ReportingDevice\":\"%s\"," \
-     "\"MagneticField\":\"%d\","   \
-     "\"ElectricField\":\"%d\","   \
+     "\"MagneticField\":\"%f\","   \
+     "\"ElectricField\":\"%f\","   \
      "\"UserID\":\"%s\","          \
      "\"TOD\":\"%s UTC\""          \
    "}"
 
-static const char* connectionString = "HostName=iotc-9fb34c7f-5eb6-4b1a-be18-eae9abab68fd.azure-devices.net;DeviceId=bpd0gzmw17;SharedAccessKey=tRThrVckItU1N17T1gKnnrrdb+bmRyurJvGEl7cVhIs=";
-static const char* deviceId               = "bpd0gzmw17"; /*must match the one on connectionString*/
+static const char* connectionString = "HostName=iotc-9fb34c7f-5eb6-4b1a-be18-eae9abab68fd.azure-devices.net;DeviceId=a77xgvjh8j;SharedAccessKey=Wgpc6I7FLAymepinjQ9HTgT/PdnPKZirI+pYi4pC6bU=";
+static const char* deviceId               = "a77xgvjh8j"; /*must match the one on connectionString*/
 
 Thread azure_client_thread(osPriorityNormal, 8*1024, NULL, "azure_client_thread"); // @suppress("Type cannot be resolved")
 Thread mag_sensor_thread(osPriorityHigh, 8*1024, NULL, "mag_sensor_thread");
@@ -555,7 +555,7 @@ void azure_task(void)
        return;
     }
 
-    bool transmit = false;
+    bool transmit = true;
     int  msg_sent=1;
 
     // setup the iotDev struction contents...
@@ -571,8 +571,8 @@ void azure_task(void)
     iotDev->Version         = (char*)APP_VERSION;
     iotDev->ReportingDevice = deviceId;
     iotDev->TOD             = (char*)"";
-    iotDev->MagneticField   = 0;
-    iotDev->ElectricField   = 0;
+    iotDev->MagneticField   = 1.0;
+    iotDev->ElectricField   = 1.0;
     iotDev->UserID          = (char*)global_name;
 
     /* Setup IoTHub client configuration */
@@ -610,12 +610,12 @@ void azure_task(void)
             printf("failure to set retry option\n");
         }
 
-    mag_sensor_thread.signal_set(MAG_AZURE_READY);
+    //mag_sensor_thread.signal_set(MAG_AZURE_READY);
     
     while (true) {
-
-        ThisThread::flags_wait_any(AZURE_TRANSMIT);
         printf("Azure TX!\n");
+        ThisThread::flags_wait_any(AZURE_TRANSMIT);
+        
         
         char*  msg;
         size_t msgSize;
@@ -628,11 +628,12 @@ void azure_task(void)
             msg = makeMessage(iotDev);
             msgSize = strlen(msg);
             sendMessage(iotHubClientHandle, msg, msgSize);
+            //printf(msg);
             free(msg);
-
+            
             /* schedule IoTHubClient to send events/receive commands */
             IoTHubClient_LL_DoWork(iotHubClientHandle);
-        }   
+        }
     }
 
     free(iotDev);
