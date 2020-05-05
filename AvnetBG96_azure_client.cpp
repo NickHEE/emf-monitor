@@ -324,9 +324,11 @@ static void label_refresher_task(void * p)
 Initialize LittleVGL with the function "display_init()", which sets up the relevant variables and links functions created in program to LittleVGL
     Also call "main_screen()" to arrange location of objects to screen within LittleVGL system
     Also call "button_drv_reg()" to link button handling function to LittleVGL (consider moving contents of function to "display_init()" instead)
-        LittleVGL documentation website: https://docs.littlevgl.com/
+        LittleVGL documentation website: https://docs.littlevgl.com/en/html/index.html
     Initialize the thread "ticker_task()", which is used as timer to update internal timer of LittleVGL and request it make updates to screen
     Initialize the thread "label_refresher_task()" which is used to update label values for LittleVGL so it knows to redraw those elements on next screen update
+    Note: "LV_HOR_RES_MAX", "LV_VER_RES_MAX", and "LV_COLOR_DEPTH" in lv_conf.h (in LittleVGL package) needs to be modified to match specs of screen
+        https://docs.littlevgl.com/en/html/porting/project.html
 
 Updating dynamic values:
     Update/change frequently changing values (e.g. current EMF value) in "label_refresher_task()"
