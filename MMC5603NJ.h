@@ -40,6 +40,8 @@
 #define CTRL_1_BW_1000HZ 0x03
 
 #define CTRL_2_CONTINUOUS_START 0x10
+#define CTRL_2_CONTINUOUS_START_HIPWR 0x90
+#define CTRL_2_HIPWR 0x80
 
 #define STATUS_1_MEAS_DONE 0x40
 
@@ -61,10 +63,9 @@ public:
     bool setBW(int BW);
     bool startContinuousMode();
     bool takeMeasurement();
+    bool setHiPWR();
     int getProductID();
     float32_t getMeasurement(bool wait);
-
-    //float getMag();
 
     I2C* i2c;
 

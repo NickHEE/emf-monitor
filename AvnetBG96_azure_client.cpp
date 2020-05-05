@@ -32,6 +32,7 @@
 #define IOT_AGENT_OK CODEFIRST_OK
 #define APP_VERSION "1.2"
 
+// These flag identifiers are arbitrary
 #define MAG_TAKE_MEASUREMENT 1
 #define MAG_IS_RECORDING 2
 #define MAG_TAKE_1_MIN_AVERAGE 4
@@ -66,7 +67,7 @@ Mutex magMutex;
 
 Ticker mag_sample_ticker;
 Ticker mag_1_min_avg_ticker;
-Ticker ticker; //Joseph
+Ticker ticker; 
 const int tick_interval = 500;
 
 DigitalOut   RST_pin(D8);
@@ -103,7 +104,7 @@ typedef struct IoTDevice_t {
 static const char* connectionString = "HostName=iotc-9fb34c7f-5eb6-4b1a-be18-eae9abab68fd.azure-devices.net;DeviceId=a77xgvjh8j;SharedAccessKey=Wgpc6I7FLAymepinjQ9HTgT/PdnPKZirI+pYi4pC6bU=";
 static const char* deviceId               = "a77xgvjh8j"; /*must match the one on connectionString*/
 
-Thread azure_client_thread(osPriorityNormal, 8*1024, NULL, "azure_client_thread"); // @suppress("Type cannot be resolved")
+Thread azure_client_thread(osPriorityNormal, 8*1024, NULL, "azure_client_thread"); 
 Thread mag_sensor_thread(osPriorityHigh, 8*1024, NULL, "mag_sensor_thread");
 Thread ticker_thread(osPriorityNormal, 8*1024, NULL, "ticker_thread");
 
@@ -242,12 +243,12 @@ void get_mag_reading(void) {
         arm_fir_f32(&FIRfilter, &magIn, &magOut, BLOCK_SIZE);
         magSamples.push_back( (float) magOut );
 
-        // Buffer ~3 cycles of 60Hz data and calculate the RMS value
+        // Buffer cycles of 60Hz data and calculate the RMS value
         if (magSamples.size() >= FILTER_BUFFER_SIZE) {
             
             magMutex.lock();
 
-            // Jank - change this later
+            // Copying from vector to array. This should probably be changed
             float* samplePtr = &magSamples[0];
             float32_t samples[FILTER_BUFFER_SIZE];
             std::copy(samplePtr, samplePtr+FILTER_BUFFER_SIZE, samples);
@@ -266,12 +267,14 @@ void get_mag_reading(void) {
             magSamples.clear();  
         }
 
+        // This is just sending an average of the readings every minute to Azure IoT Central.
+        // It should be modified to write measurements to the SD card instead. Since we have storage, we can 
+        // send the data to Azure at the end of the recording session
         if (ThisThread::flags_get() & MAG_TAKE_1_MIN_AVERAGE) {
             
             mag1minAvg = std::accumulate(magReadings.begin(), magReadings.end(), 0.0) / magReadings.size();
         
             magMutex.lock();
-            // Maybe we should just store all the 1 min averages of a session
             magSessionAvg = (magSessionAvg + mag1minAvg) / 2;
             magMutex.unlock();
             magReadings.clear();
@@ -541,7 +544,6 @@ void my_disp_flush_cb(lv_disp_drv_t* disp_drv, const lv_area_t* area, lv_color_t
             color_p++;
         }
     }
-    // screen->ce->write(1);
     cePin.write(1);
     //IMPORTANT!!!* Inform the graphics library that you are ready with the flushing
     lv_disp_flush_ready(disp_drv);
@@ -555,8 +557,9 @@ void azure_task(void)
        return;
     }
 
-    bool transmit = true;
-    int  msg_sent=1;
+    // Set this to true to transmit to Azure
+    bool transmit = false;
+    int  msg_sent = 1;
 
     // setup the iotDev struction contents...
     IoTDevice* iotDev = (IoTDevice*)malloc(sizeof(IoTDevice));
