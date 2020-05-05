@@ -49,11 +49,8 @@ void ST7735::writecommand(char c)
 {
     dc->write(0);
     ce->write(0);
-//wait_ms(5);
     spi->write(c);
-//delay_loop(75);
     ce->write(1);
-//wait_ms(10);
 }
 
 // Write command word
@@ -61,80 +58,9 @@ void ST7735::writedata(char c)
 {
     dc->write(1);
     ce->write(0);
-//wait_ms(5);
     spi->write(c);
-//delay_loop(75);
     ce->write(1);
-//wait_ms(10);
 } 
-
-void ST7735::init_old()
-{
-	// try calling the draw rectangle thing separately (make another function)
-	// if works, try regular initialization with that function
-	// see why calling equivalent code from this function does not work
-	int x=50;
-	int y=50;
-	int w=50;
-	int h=50;
-	
-	wait_ms(100);   // Wait for reset to be stable after power-up
-	colstart  = rowstart = 0; // May be overridden in init func
-	writecommand(ST7735_SLPOUT); //don't sleep
-    writecommand(ST7735_DISPON);  // turn display on
-    writecommand(ST7735_COLMOD);  // request bit per pixel change
-    writedata(0x05);  // 16 bit per pixel
-	
-	wait_ms(100);
-	setAddrWindow(x, y, x+w-1, y+h-1);
-int color = ST7735_BLACK;
-  uint8_t hi = color >> 8, lo = color;
-
-  dc->write(1);
-  ce->write(0);
-
-  for(y=h; y>0; y--) {
-    for(x=w; x>0; x--) {
-      spi->write(hi);
-      spi->write(lo);
-    }
-  }
-  wait_ms(10);
- ce->write(1);
-	
-	
-	x=10;
-	y=10;
-
-	wait_ms(100);
-	setAddrWindow(x, y, x+w-1, y+h-1);
-color = ST7735_GREEN;
- hi = color >> 8, lo = color;
-
-  dc->write(1);
-  ce->write(0);
-
-  for(y=h; y>0; y--) {
-    for(x=w; x>0; x--) {
-      spi->write(hi);
-      spi->write(lo);
-    }
-  }
-  //wait_ms(10);
- ce->write(1);
-	
-	wait_ms(100);
-	fillRect(70,70,20,20, ST7735_GREY);
-	
-}
-
-void ST7735::delay_loop(long ticks)
-{
-    long i;
-    for (i = 0; i < ticks; i++)
-    {
-    }
-}
 
 // Rather than a bazillion writecommand() and writedata() calls, screen
 // initialization commands and arguments are organized in tables
