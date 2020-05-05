@@ -4,7 +4,7 @@
 int main(void) {
 
     I2C i2c = I2C(I2C_SDA, I2C_SCL);
-    MMC5603NJ magSensor = MMC5603NJ(i2c, 140);
+    MMC5603NJ magSensor = MMC5603NJ(i2c, 140, CTRL_1_BW_255HZ);
     int test;
 
     while (true) (
