@@ -121,10 +121,8 @@ private:
     void commonInit(const uint8_t *cmdList);
     void commandList(const uint8_t *addr);
     void pushColor(uint16_t color);  
-    void delay_loop(long ticks);  
 	  
 public:
-	void init_old();
     uint8_t tabcolor;      
     uint8_t colstart, rowstart; // some displays need this changed
     void output_color(uint8_t hi, uint8_t lo);
