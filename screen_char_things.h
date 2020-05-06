@@ -1,3 +1,8 @@
+// screen_char_things.h
+// This file has bitmaps for displaying characters to the ST7735 screen. Functions to make use of these bitmaps are found
+//	near the bottom of the AvnetBG96_azure_client.cpp file within this branch.
+// Since LittleVGL handles characters/strings already, using this file is unneeded.
+
 #pragma once
 #define ROW 10 				// rows of display
 #define COL 50 				// columns of display
