@@ -38,12 +38,24 @@ bool MMC5603NJ::startContinuousMode() {
     char data2[2];
     data2[0] = CTRL_2;
     data2[1] = CTRL_2_CONTINUOUS_START;
+    //data2[1] = CTRL_2_CONTINUOUS_START_HIPWR; uncomment for high power mode
     
     if (!i2c->write(MMC5603NJ_WRITE, data1, 2)) {
         
         if(!i2c->write(MMC5603NJ_WRITE, data2, 2 )) {
             return true;
         }
+    }
+    return false;
+}
+
+bool MMC5603NJ::setHiPWR() {
+    char data[2];
+    data[0] = CTRL_2;
+    data[1] = CTRL_2_HIPWR;
+
+    if (!i2c->write(MMC5603NJ_WRITE, data, 2)) {
+        return true;
     }
     return false;
 }
@@ -101,13 +113,13 @@ float32_t MMC5603NJ::getMeasurement(bool wait) {
     //        "Zout0: %d, Zout1: %d, Zout2: %d\n", 
     // axisData[0],axisData[1],axisData[6],axisData[2],axisData[3],axisData[7],axisData[4],axisData[5],axisData[8]);
 
+    //3 Bytes of data are returned for each axis so we have to combine them together
     x = (float32_t) (((axisData[0] << 12) + (axisData[1] << 4) + (axisData[6] >> 4)) * sensitivity) - 32768;
     y = (float32_t) (((axisData[2] << 12) + (axisData[3] << 4) + (axisData[7] >> 4)) * sensitivity) - 32768;
     z = (float32_t) (((axisData[4] << 12) + (axisData[5] << 4) + (axisData[8] >> 4)) * sensitivity) - 32768;
 
     return sqrt(pow(x, 2) + pow(y, 2) + pow(z, 2));
 
-    //return sqrt(pow((float32_t)axisData[0], 2) + pow((float32_t)axisData[1], 2) + pow((float32_t)axisData[2], 2));
 }
 
 

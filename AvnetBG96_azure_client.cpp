@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
-//#define USE_MQTT
+#define USE_MQTT
 //py -2 -m mbed compile -m NUCLEO_L496ZG -t GCC_ARM --profile toolchain_debug.json
 
 #include <stdlib.h>
@@ -32,6 +32,7 @@
 #define IOT_AGENT_OK CODEFIRST_OK
 #define APP_VERSION "1.2"
 
+// These flag identifiers are arbitrary
 #define MAG_TAKE_MEASUREMENT 1
 #define MAG_IS_RECORDING 2
 #define MAG_TAKE_1_MIN_AVERAGE 4
@@ -66,7 +67,7 @@ Mutex magMutex;
 
 Ticker mag_sample_ticker;
 Ticker mag_1_min_avg_ticker;
-Ticker ticker; //Joseph
+Ticker ticker; 
 const int tick_interval = 500;
 
 DigitalOut   RST_pin(D8);
@@ -94,17 +95,17 @@ typedef struct IoTDevice_t {
      "\"ObjectType\":\"%s\","      \
      "\"Version\":\"%s\","         \
      "\"ReportingDevice\":\"%s\"," \
-     "\"MagneticField\":\"%.1f\","   \
-     "\"ElectricField\":\"%.1f\","   \
+     "\"MagneticField\":\"%f\","   \
+     "\"ElectricField\":\"%f\","   \
      "\"UserID\":\"%s\","          \
      "\"TOD\":\"%s UTC\""          \
    "}"
 
-static const char* connectionString = "HostName=iotc-9fb34c7f-5eb6-4b1a-be18-eae9abab68fd.azure-devices.net;DeviceId=8znd9stgg;SharedAccessKey=m9S7AcxtVYzOekFuJL5z17xvwdTbR5w1xAaIW66clWA=";
-static const char* deviceId               = "8znd9stgg"; /*must match the one on connectionString*/
+static const char* connectionString = "HostName=iotc-9fb34c7f-5eb6-4b1a-be18-eae9abab68fd.azure-devices.net;DeviceId=a77xgvjh8j;SharedAccessKey=Wgpc6I7FLAymepinjQ9HTgT/PdnPKZirI+pYi4pC6bU=";
+static const char* deviceId               = "a77xgvjh8j"; /*must match the one on connectionString*/
 
-Thread azure_client_thread(osPriorityNormal, 8*1024, NULL, "azure_client_thread"); // @suppress("Type cannot be resolved")
-Thread mag_sensor_thread(osPriorityNormal, 8*1024, NULL, "mag_sensor_thread");
+Thread azure_client_thread(osPriorityNormal, 8*1024, NULL, "azure_client_thread"); 
+Thread mag_sensor_thread(osPriorityHigh, 8*1024, NULL, "mag_sensor_thread");
 Thread ticker_thread(osPriorityNormal, 8*1024, NULL, "ticker_thread");
 
 static void azure_task(void);
@@ -185,29 +186,35 @@ int main(void)
     printf("EMF MONITOR PROTOTYPE VERSION 1.0\n");
     printf("\r\n");
     
-    // Init Display
-    printf("Initializing Display...\n");
-    screen = new ST7735(D10, D9, D11, D13);
-    RST_pin = 0; wait_ms(50);
-    RST_pin = 1; wait_ms(50);
-    screen->initR(INITR_GREENTAB);
-    screen->setRotation(0);wait_ms(100);
-    screen->fillScreen(ST7735_BLACK); // have as other color for testing purposes
-    display_init(); 
-    main_screen();
+    // Init Display - Uncomment if using UI
+    // printf("Initializing Display...\n");
+    // screen = new ST7735(D10, D9, D11, D13);
+    // RST_pin = 0; wait_ms(50);
+    // RST_pin = 1; wait_ms(50);
+    // screen->initR(INITR_GREENTAB);
+    // screen->setRotation(0);wait_ms(100);
+    // screen->fillScreen(ST7735_BLACK); // have as other color for testing purposes
+    // display_init(); 
+    // main_screen();
 
     // Start Threads
-    azure_client_thread.start(azure_task);
+
+    // Uncomment for Azure
+    //azure_client_thread.start(azure_task);
+    
     mag_sensor_thread.start(get_mag_reading);
     mag_sensor_thread.signal_set(MAG_IS_RECORDING);
-    ticker_thread.start(ticker_task);
-    lv_task_create(label_refresher_task, 100, LV_TASK_PRIO_MID, NULL);
+    
+    // Uncomment for UI
+    //ticker_thread.start(ticker_task);
+    //lv_task_create(label_refresher_task, 100, LV_TASK_PRIO_MID, NULL);
     
     mag_sensor_thread.join();
-    azure_client_thread.join();
-    ticker_thread.join();
+    //azure_client_thread.join();
+    //ticker_thread.join();
 
-    platform_deinit();
+    // Uncomment if using Azure
+    //platform_deinit();
 
     return 0;
 }
@@ -242,12 +249,12 @@ void get_mag_reading(void) {
         arm_fir_f32(&FIRfilter, &magIn, &magOut, BLOCK_SIZE);
         magSamples.push_back( (float) magOut );
 
-        // Buffer ~3 cycles of 60Hz data and calculate the RMS value
+        // Buffer cycles of 60Hz data and calculate the RMS value
         if (magSamples.size() >= FILTER_BUFFER_SIZE) {
             
             magMutex.lock();
 
-            // Jank - change this later
+            // Copying from vector to array. This should probably be changed
             float* samplePtr = &magSamples[0];
             float32_t samples[FILTER_BUFFER_SIZE];
             std::copy(samplePtr, samplePtr+FILTER_BUFFER_SIZE, samples);
@@ -266,18 +273,20 @@ void get_mag_reading(void) {
             magSamples.clear();  
         }
 
+        /* This is just sending an average of the readings every minute to Azure IoT Central.
+        It should be modified to write measurements to the SD card instead. Since we have storage, we can 
+        send the data to Azure at the end of the recording session */
         if (ThisThread::flags_get() & MAG_TAKE_1_MIN_AVERAGE) {
             
-            mag1minAvg = std::accumulate(magReadings.begin(), magReadings.end(), 0.0) / magReadings.size();
+            // mag1minAvg = std::accumulate(magReadings.begin(), magReadings.end(), 0.0) / magReadings.size();
         
-            magMutex.lock();
-            // Maybe we should just store all the 1 min averages of a session
-            magSessionAvg = (magSessionAvg + mag1minAvg) / 2;
-            magMutex.unlock();
-            magReadings.clear();
+            // magMutex.lock();
+            // magSessionAvg = (magSessionAvg + mag1minAvg) / 2;
+            // magMutex.unlock();
+            // magReadings.clear();
 
-            ThisThread::flags_clear(MAG_TAKE_1_MIN_AVERAGE);
-            azure_client_thread.signal_set(AZURE_TRANSMIT);
+            // ThisThread::flags_clear(MAG_TAKE_1_MIN_AVERAGE);
+            // azure_client_thread.signal_set(AZURE_TRANSMIT);
         }
     }   
 }
@@ -541,7 +550,6 @@ void my_disp_flush_cb(lv_disp_drv_t* disp_drv, const lv_area_t* area, lv_color_t
             color_p++;
         }
     }
-    // screen->ce->write(1);
     cePin.write(1);
     //IMPORTANT!!!* Inform the graphics library that you are ready with the flushing
     lv_disp_flush_ready(disp_drv);
@@ -555,8 +563,9 @@ void azure_task(void)
        return;
     }
 
+    // Set this to true to transmit to Azure
     bool transmit = false;
-    int  msg_sent=1;
+    int  msg_sent = 1;
 
     // setup the iotDev struction contents...
     IoTDevice* iotDev = (IoTDevice*)malloc(sizeof(IoTDevice));
@@ -571,8 +580,8 @@ void azure_task(void)
     iotDev->Version         = (char*)APP_VERSION;
     iotDev->ReportingDevice = deviceId;
     iotDev->TOD             = (char*)"";
-    iotDev->MagneticField   = 0;
-    iotDev->ElectricField   = 0;
+    iotDev->MagneticField   = 1.0;
+    iotDev->ElectricField   = 1.0;
     iotDev->UserID          = (char*)global_name;
 
     /* Setup IoTHub client configuration */
@@ -610,12 +619,12 @@ void azure_task(void)
             printf("failure to set retry option\n");
         }
 
-    mag_sensor_thread.signal_set(MAG_AZURE_READY);
+    //mag_sensor_thread.signal_set(MAG_AZURE_READY);
     
     while (true) {
-        printf("Done.\n");
-        ThisThread::flags_wait_any(AZURE_TRANSMIT);
         printf("Azure TX!\n");
+        ThisThread::flags_wait_any(AZURE_TRANSMIT);
+        
         
         char*  msg;
         size_t msgSize;
@@ -631,11 +640,12 @@ void azure_task(void)
             msg = makeMessage(iotDev);
             msgSize = strlen(msg);
             sendMessage(iotHubClientHandle, msg, msgSize);
+            //printf(msg);
             free(msg);
-
+            
             /* schedule IoTHubClient to send events/receive commands */
             IoTHubClient_LL_DoWork(iotHubClientHandle);
-        }   
+        }
     }
 
     free(iotDev);
