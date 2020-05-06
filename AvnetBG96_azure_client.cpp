@@ -186,29 +186,35 @@ int main(void)
     printf("EMF MONITOR PROTOTYPE VERSION 1.0\n");
     printf("\r\n");
     
-    // Init Display
-    printf("Initializing Display...\n");
-    screen = new ST7735(D10, D9, D11, D13);
-    RST_pin = 0; wait_ms(50);
-    RST_pin = 1; wait_ms(50);
-    screen->initR(INITR_GREENTAB);
-    screen->setRotation(0);wait_ms(100);
-    screen->fillScreen(ST7735_BLACK); // have as other color for testing purposes
-    display_init(); 
-    main_screen();
+    // Init Display - Uncomment if using UI
+    // printf("Initializing Display...\n");
+    // screen = new ST7735(D10, D9, D11, D13);
+    // RST_pin = 0; wait_ms(50);
+    // RST_pin = 1; wait_ms(50);
+    // screen->initR(INITR_GREENTAB);
+    // screen->setRotation(0);wait_ms(100);
+    // screen->fillScreen(ST7735_BLACK); // have as other color for testing purposes
+    // display_init(); 
+    // main_screen();
 
     // Start Threads
-    azure_client_thread.start(azure_task);
+
+    // Uncomment for Azure
+    //azure_client_thread.start(azure_task);
+    
     mag_sensor_thread.start(get_mag_reading);
     mag_sensor_thread.signal_set(MAG_IS_RECORDING);
-    ticker_thread.start(ticker_task);
-    lv_task_create(label_refresher_task, 100, LV_TASK_PRIO_MID, NULL);
+    
+    // Uncomment for UI
+    //ticker_thread.start(ticker_task);
+    //lv_task_create(label_refresher_task, 100, LV_TASK_PRIO_MID, NULL);
     
     mag_sensor_thread.join();
-    azure_client_thread.join();
-    ticker_thread.join();
+    //azure_client_thread.join();
+    //ticker_thread.join();
 
-    platform_deinit();
+    // Uncomment if using Azure
+    //platform_deinit();
 
     return 0;
 }
@@ -267,20 +273,20 @@ void get_mag_reading(void) {
             magSamples.clear();  
         }
 
-        // This is just sending an average of the readings every minute to Azure IoT Central.
-        // It should be modified to write measurements to the SD card instead. Since we have storage, we can 
-        // send the data to Azure at the end of the recording session
+        /* This is just sending an average of the readings every minute to Azure IoT Central.
+        It should be modified to write measurements to the SD card instead. Since we have storage, we can 
+        send the data to Azure at the end of the recording session */
         if (ThisThread::flags_get() & MAG_TAKE_1_MIN_AVERAGE) {
             
-            mag1minAvg = std::accumulate(magReadings.begin(), magReadings.end(), 0.0) / magReadings.size();
+            // mag1minAvg = std::accumulate(magReadings.begin(), magReadings.end(), 0.0) / magReadings.size();
         
-            magMutex.lock();
-            magSessionAvg = (magSessionAvg + mag1minAvg) / 2;
-            magMutex.unlock();
-            magReadings.clear();
+            // magMutex.lock();
+            // magSessionAvg = (magSessionAvg + mag1minAvg) / 2;
+            // magMutex.unlock();
+            // magReadings.clear();
 
-            ThisThread::flags_clear(MAG_TAKE_1_MIN_AVERAGE);
-            azure_client_thread.signal_set(AZURE_TRANSMIT);
+            // ThisThread::flags_clear(MAG_TAKE_1_MIN_AVERAGE);
+            // azure_client_thread.signal_set(AZURE_TRANSMIT);
         }
     }   
 }
